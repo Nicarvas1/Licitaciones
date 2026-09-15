@@ -34,6 +34,7 @@ from pathlib import Path
 
 try:
     import fitz
+    import pdfplumber
     import requests
     from openai import OpenAI
     from docx import Document
@@ -42,7 +43,7 @@ try:
 except ImportError as exc:
     sys.exit(
         f"Falta dependencia: {exc}. Instala: "
-        "pip install pymupdf requests python-docx openpyxl openai"
+        "pip install pymupdf pdfplumber requests python-docx openpyxl openai"
     )
 
 def cargar_env_local():
@@ -230,6 +231,37 @@ def cargar_metadata_licitaciones(ruta):
 
 
 def extraer_pdf(path, max_paginas):
+    # pdfplumber detecta tablas por coordenadas y evita que filas/columnas
+    # se mezclen al aplanar el PDF a texto lineal (bug de get_text("text")).
+    try:
+        partes = []
+        with pdfplumber.open(path) as pdf:
+            for index, page in enumerate(pdf.pages):
+                if index >= max_paginas:
+                    break
+                texto_pagina = (page.extract_text() or "").strip()
+                if texto_pagina:
+                    partes.append(texto_pagina)
+                try:
+                    tablas = page.find_tables()
+                except Exception:
+                    tablas = []
+                for num_tabla, tabla in enumerate(tablas, 1):
+                    filas = tabla.extract()
+                    if not filas:
+                        continue
+                    partes.append(f"[TABLA {num_tabla} - pagina {index + 1}, una fila por producto]")
+                    for num_fila, fila in enumerate(filas, 1):
+                        valores = [(celda or "").strip().replace("\n", " ") for celda in fila]
+                        if any(valores):
+                            partes.append(f"FILA {num_fila}: " + " || ".join(valores))
+        texto = limpiar_control("\n".join(partes)).strip()
+        if len(texto) > 40:
+            return texto, "texto"
+    except Exception:
+        texto = ""
+
+    # Respaldo: pdfplumber no extrajo nada usable (ej. PDF escaneado sin capa de texto normal).
     try:
         doc = fitz.open(path)
         partes = []
