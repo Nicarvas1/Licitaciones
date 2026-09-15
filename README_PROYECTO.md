@@ -49,6 +49,23 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m playwright install chromium
 ```
 
+La version local comparte con la prueba OpenAI el filtro de productos, la
+consolidacion economico-tecnica, la inferencia de cantidad por
+`precio_total/precio_unitario`, el cruce de metadatos y el reporte con hojas
+`Productos`, `Consumo` y `Resumen`.
+
+Ejemplo recomendado para la Z2 con Qwen3:
+
+```powershell
+.\.venv\Scripts\python.exe .\3_extraer_ia.py `
+  --dir ".\lotes\2025-11\ofertas" `
+  --backend lmstudio `
+  --modelo "qwen3-32b" `
+  --metadata-csv ".\lotes\2025-11\para_scrapear.csv" `
+  --rehacer `
+  --excel ".\lotes\2025-11\resultado_local_qwen3.xlsx"
+```
+
 Ollama se instala por separado para `3_extraer_ia.py`. 7-Zip tambien es una
 instalacion externa y permite procesar anexos `.rar` y `.7z`.
 

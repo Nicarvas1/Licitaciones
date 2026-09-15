@@ -74,9 +74,11 @@ Devuelve SOLO JSON valido:
       "marca": "marca o null",
       "modelo": "modelo o null",
       "cantidad": null,
+    "cantidad_fuente": "explicita|inferida_total_dividido_unitario|null",
       "precio_unitario": null,
       "precio_total": null,
       "moneda": "CLP|USD|UTM|null",
+    "categoria": "equipo|monitor|impresora|consumible|complemento|null",
       "confianza": "alta|media|baja"
     }}
   ],
@@ -88,7 +90,13 @@ REGLAS:
 - Extrae una fila por item o producto.
 - En archivos tecnicos conserva producto, marca y modelo aunque no haya precio.
 - En archivos economicos conserva cantidad y precios aunque la descripcion sea generica.
+- Busca expresamente campos como "precio por equipo", "monto por equipo",
+    "precio unitario", "oferta por equipo", "precio total", "monto total" y
+    "total equipos". Si aparecen precio unitario y total de la misma oferta,
+    devuelve ambos aunque la cantidad no este escrita.
 - Si existe cantidad y precio total de linea, calcula precio_unitario = total/cantidad.
+- Si la cantidad no aparece pero precio_total/precio_unitario produce una division
+    entera positiva, devuelve ambos precios y deja que el programa infiera la cantidad.
 - No uses IVA, subtotal ni total general como producto o precio unitario.
 - No inventes. Usa null cuando el dato no aparece.
 - Si no hay productos, devuelve {{"productos": [], "observaciones": "motivo"}}.
@@ -129,9 +137,11 @@ Devuelve SOLO JSON valido:
       "marca": "marca o null",
       "modelo": "modelo o null",
       "cantidad": null,
+    "cantidad_fuente": "explicita|inferida_total_dividido_unitario|null",
       "precio_unitario": null,
       "precio_total": null,
       "moneda": "CLP|USD|UTM|null",
+    "categoria": "equipo|monitor|impresora|consumible|complemento|null",
       "fuente_producto": "archivo o null",
       "fuente_precio": "archivo o null",
       "confianza": "alta|media|baja"
@@ -145,6 +155,9 @@ REGLAS:
 - No confundas el total general del proveedor con un precio unitario.
 - Si no puedes unir un precio con seguridad, conserva el producto con precio null.
 - Si hay total de linea y cantidad, calcula precio_unitario = total/cantidad.
+- Busca la cantidad en todos los documentos de la oferta, incluso si aparece solo
+    en el tecnico o en el nombre del item. Combina esa cantidad con el precio del
+    economico cuando la correspondencia sea razonable.
 - La cantidad puede estar en el anexo tecnico, el precio unitario y total en el
     economico, y la marca/modelo en otro documento del mismo proveedor: combina
     esas fuentes cuando describan el mismo equipo.
@@ -417,7 +430,7 @@ def consultar_modelo(prompt, modelo, timeout, num_ctx, backend="ollama"):
     try:
         respuesta = requests.post(url, json=payload, timeout=timeout)
         if respuesta.status_code >= 400:
-            return None, f"http_{respuesta.status_code}: {respuesta.text[:500]}", ""
+            return None, f"http_{respuesta.status_code}: {respuesta.text[:500]}", "", {}
         datos_respuesta = respuesta.json()
         if backend == "lmstudio":
             cruda = ((datos_respuesta.get("choices") or [{}])[0]
@@ -425,11 +438,29 @@ def consultar_modelo(prompt, modelo, timeout, num_ctx, backend="ollama"):
         else:
             cruda = datos_respuesta.get("response", "")
         datos, estado = parsear_json(cruda)
-        return datos, estado, cruda
+        if backend == "lmstudio":
+            uso = datos_respuesta.get("usage") or {}
+            consumo = {
+                "modelo": datos_respuesta.get("model", modelo),
+                "prompt_tokens": uso.get("prompt_tokens"),
+                "completion_tokens": uso.get("completion_tokens"),
+                "total_tokens": uso.get("total_tokens"),
+            }
+        else:
+            consumo = {
+                "modelo": modelo,
+                "prompt_tokens": datos_respuesta.get("prompt_eval_count"),
+                "completion_tokens": datos_respuesta.get("eval_count"),
+                "total_tokens": (
+                    (datos_respuesta.get("prompt_eval_count") or 0)
+                    + (datos_respuesta.get("eval_count") or 0)
+                ),
+            }
+        return datos, estado, cruda, consumo
     except requests.exceptions.ConnectionError as exc:
         raise RuntimeError(f"{backend} dejo de responder: {exc}")
     except Exception as exc:
-        return None, f"error_ollama: {exc}", ""
+        return None, f"error_{backend}: {exc}", "", {}
 
 
 def normalizar_numero(valor):
@@ -555,7 +586,7 @@ def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
         pistas_precio="\n".join(precios_pista) or "(ninguna)",
         texto=texto_reducido
     )
-    datos, estado, cruda = consultar_modelo(
+    datos, estado, cruda, consumo = consultar_modelo(
         prompt, args.modelo, args.timeout, args.num_ctx, args.backend
     )
     productos = []
@@ -565,7 +596,7 @@ def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
                 limpio = normalizar_producto(producto, proveedor, rut, relativo, tipo_doc)
                 if limpio:
                     productos.append(limpio)
-    return productos, estado, cruda, prompt, datos.get("observaciones") if isinstance(datos, dict) else None
+    return productos, estado, cruda, prompt, datos.get("observaciones") if isinstance(datos, dict) else None, consumo
 
 
 def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
@@ -580,7 +611,7 @@ def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
         total_oferta=total_oferta or "no informado",
         parciales=resumen
     )
-    datos, estado, cruda = consultar_modelo(
+    datos, estado, cruda, consumo = consultar_modelo(
         prompt, args.modelo, args.timeout, args.num_ctx, args.backend
     )
     consolidados = []
@@ -593,7 +624,7 @@ def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
                 limpio["fuente_producto"] = producto.get("fuente_producto")
                 limpio["fuente_precio"] = producto.get("fuente_precio")
                 consolidados.append(limpio)
-    return filtrar_productos_relevantes(consolidados or parciales), estado, cruda, prompt
+    return filtrar_productos_relevantes(consolidados or parciales), estado, cruda, prompt, consumo
 
 
 def procesar_oferta(carpeta, args, seven_zip):
@@ -643,13 +674,14 @@ def procesar_oferta(carpeta, args, seven_zip):
         elif estado_lectura in ("no_soportado", "xls_legacy_no_soportado"):
             no_soportados.append(relativo)
         elif estado_lectura == "texto" and texto and not args.solo_texto:
-            productos, estado_ia, cruda, prompt, observaciones = extraer_parciales_archivo(
+            productos, estado_ia, cruda, prompt, observaciones, consumo = extraer_parciales_archivo(
                 Path(relativo), texto, proveedor, rut, total_oferta, args
             )
             parciales.extend(productos)
             registro["estado_ia"] = estado_ia
             registro["productos_encontrados"] = len(productos)
             registro["observaciones"] = observaciones
+            registro["consumo_local"] = consumo
             if args.debug:
                 base = f"{indice:02d}__{re.sub(r'[^\w.-]', '_', path.stem)[:70]}"
                 (debug_dir / f"{base}__prompt.txt").write_text(prompt, encoding="utf-8")
@@ -661,8 +693,9 @@ def procesar_oferta(carpeta, args, seven_zip):
 
     productos_finales = []
     estado_consolidacion = "no_ejecutada"
+    consumo_consolidacion = {}
     if not args.solo_texto:
-        productos_finales, estado_consolidacion, cruda_consolidacion, prompt_consolidacion = consolidar_parciales(
+        productos_finales, estado_consolidacion, cruda_consolidacion, prompt_consolidacion, consumo_consolidacion = consolidar_parciales(
             parciales, proveedor, rut, total_oferta, args
         )
         if args.debug and prompt_consolidacion:
@@ -677,6 +710,7 @@ def procesar_oferta(carpeta, args, seven_zip):
         "productos_parciales": filtrar_productos_relevantes(parciales),
         "resultados_archivos": resultados_archivos,
         "estado_consolidacion": estado_consolidacion,
+        "consumo_consolidacion": consumo_consolidacion,
         "archivos_comprimidos": archivos_comprimidos,
         "necesita_ocr": necesita_ocr,
         "no_soportados": no_soportados,
@@ -690,25 +724,40 @@ def detectar_licitaciones(raiz):
     return [hijo for hijo in raiz.iterdir() if hijo.is_dir()]
 
 
-def generar_excel(productos, ruta):
+def generar_excel(productos, consumos, resumenes, ruta):
     columnas = [
         "codigo", "nombre_licitacion", "fecha_publicacion", "estado_licitacion",
         "organismo", "proveedor", "rut", "item", "producto", "categoria", "marca", "modelo",
         "cantidad", "cantidad_fuente", "precio_unitario", "precio_total", "moneda",
         "fuente_producto", "fuente_precio", "archivo_fuente", "confianza"
     ]
+    consumo_columnas = [
+        "codigo", "proveedor", "rut", "tipo_llamada", "archivo", "estado",
+        "modelo", "prompt_tokens", "completion_tokens", "total_tokens"
+    ]
+    resumen_columnas = [
+        "codigo", "nombre_licitacion", "fecha_publicacion", "organismo",
+        "proveedores", "productos", "llamadas", "ocr", "no_soportados"
+    ]
+
     wb = Workbook()
-    ws = wb.active
-    ws.title = "Productos"
-    for columna, nombre in enumerate(columnas, 1):
-        celda = ws.cell(1, columna, nombre)
-        celda.font = Font(bold=True, color="FFFFFF")
-        celda.fill = PatternFill("solid", fgColor="1F4E78")
-    for fila, producto in enumerate(productos, 2):
-        for columna, nombre in enumerate(columnas, 1):
-            ws.cell(fila, columna, producto.get(nombre))
-    ws.freeze_panes = "A2"
-    ws.auto_filter.ref = ws.dimensions
+    wb.remove(wb.active)
+
+    def crear_hoja(nombre, campos, filas):
+        ws = wb.create_sheet(nombre)
+        for columna, campo in enumerate(campos, 1):
+            celda = ws.cell(1, columna, campo)
+            celda.font = Font(bold=True, color="FFFFFF")
+            celda.fill = PatternFill("solid", fgColor="1F4E78")
+        for fila, datos in enumerate(filas, 2):
+            for columna, campo in enumerate(campos, 1):
+                ws.cell(fila, columna, datos.get(campo))
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+    crear_hoja("Productos", columnas, productos)
+    crear_hoja("Consumo", consumo_columnas, consumos)
+    crear_hoja("Resumen", resumen_columnas, resumenes)
     wb.save(ruta)
 
 
@@ -745,6 +794,8 @@ def main():
     licitaciones = detectar_licitaciones(raiz)
     metadata_licitaciones = cargar_metadata_licitaciones(args.metadata_csv)
     todos = []
+    consumos = []
+    resumenes = []
 
     print("=" * 74)
     print(f"EXTRACCION IA v4 | backend={args.backend} | modelo={args.modelo} | licitaciones={len(licitaciones)}")
@@ -783,6 +834,43 @@ def main():
                 detener = True
                 break
             resultados.append(resultado)
+            contexto = metadata_licitaciones.get(licitacion.name, {})
+            llamadas = 0
+            for archivo in resultado["resultados_archivos"]:
+                uso = archivo.get("consumo_local") or {}
+                if archivo.get("estado_ia") not in ("no_ejecutada", "solo_texto"):
+                    llamadas += 1
+                    consumos.append({
+                        "codigo": licitacion.name,
+                        "proveedor": resultado["proveedor"],
+                        "rut": resultado["rut"],
+                        "tipo_llamada": "archivo",
+                        "archivo": archivo.get("archivo", ""),
+                        "estado": archivo.get("estado_ia", ""),
+                        **uso,
+                    })
+            if resultado.get("estado_consolidacion") not in ("no_ejecutada", "omitida"):
+                llamadas += 1
+                consumos.append({
+                    "codigo": licitacion.name,
+                    "proveedor": resultado["proveedor"],
+                    "rut": resultado["rut"],
+                    "tipo_llamada": "consolidacion",
+                    "archivo": "",
+                    "estado": resultado.get("estado_consolidacion", ""),
+                    **(resultado.get("consumo_consolidacion") or {}),
+                })
+            resumenes.append({
+                "codigo": licitacion.name,
+                "nombre_licitacion": contexto.get("nombre_licitacion", ""),
+                "fecha_publicacion": contexto.get("fecha_publicacion", ""),
+                "organismo": contexto.get("organismo", ""),
+                "proveedores": 1,
+                "productos": len(resultado.get("productos", [])),
+                "llamadas": llamadas,
+                "ocr": len(resultado.get("necesita_ocr", [])),
+                "no_soportados": len(resultado.get("no_soportados", [])),
+            })
             print(
                 f"  {resultado['proveedor'][:34]:34} "
                 f"parciales={len(resultado['productos_parciales']):2} "
@@ -818,7 +906,7 @@ def main():
 
     ruta_excel = Path(args.excel) if args.excel else raiz / "resultado_productos.xlsx"
     if todos:
-        generar_excel(todos, ruta_excel)
+        generar_excel(todos, consumos, resumenes, ruta_excel)
 
     print("\n" + "=" * 74)
     print(f"Productos consolidados: {len(todos)}")
