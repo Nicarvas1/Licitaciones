@@ -1,0 +1,12 @@
+# Scraping de Mercado Publico
+beautifulsoup4==4.15.0
+playwright==1.62.0
+
+# Extraccion de documentos y generacion de Excel
+PyMuPDF==1.28.2
+requests==2.34.2
+python-docx==1.2.0
+openpyxl==3.1.5
+
+# Pruebas opcionales con la API de OpenAI
+openai==3.11.0

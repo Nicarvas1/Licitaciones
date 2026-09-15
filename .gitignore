@@ -1,0 +1,37 @@
+# Secretos y configuracion local
+.env
+.env.*
+!.env.example
+
+# Entornos y cache de Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Datos descargados y resultados locales
+ofertas/
+lotes/
+descargas/
+_extraidos/
+_debug_ia/
+*.pdf
+*.docx
+*.xlsx
+*.xls
+*.xlsm
+*.zip
+*.rar
+*.7z
+*.csv
+*.json
+*.html
+*.log
+
+# Archivos temporales del sistema y del editor
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+~$*
