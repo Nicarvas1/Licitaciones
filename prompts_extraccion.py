@@ -20,7 +20,7 @@ Devuelve SOLO JSON valido:
       "precio_unitario": null,
       "precio_total": null,
       "moneda": "CLP|USD|UTM|null",
-      "categoria": "equipo|monitor|impresora|consumible|complemento|null",
+      "categoria": "equipo|monitor|impresora|null",
       "confianza": "alta|media|baja"
     }}
   ],
@@ -36,21 +36,26 @@ REGLAS:
     "precio unitario", "oferta por equipo", "precio total", "monto total" y
     "total equipos". Si aparecen precio unitario y total de la misma oferta,
     devuelve ambos aunque la cantidad no este escrita.
-- Si existe cantidad y precio total de linea, calcula precio_unitario = total/cantidad.
+- Si existe cantidad y precio total DE ESA LINEA, calcula precio_unitario = total/cantidad.
 - Si la cantidad no aparece pero precio_total/precio_unitario produce una division
     entera positiva, devuelve ambos precios y deja que el programa infiera la cantidad.
+- Si solo aparece un total general de la oferta, no lo asignes a ningun producto.
+- Si solo aparece un precio total de linea pero no hay cantidad comprobable, conserva
+  precio_total y devuelve precio_unitario null.
 - No uses IVA, subtotal ni total general como producto o precio unitario.
 - No inventes. Usa null cuando el dato no aparece.
 - Si no hay productos, devuelve {{"productos": [], "observaciones": "motivo"}}.
-- El alcance comercial es SOLO: notebook/laptop/portatil, desktop/escritorio/PC,
-    all-in-one/AIO, workstation, monitor, impresora/multifuncional y sus tintas o
-    toner. Puedes incluir teclado, mouse u otro complemento SOLO si acompana a un
-    equipo computacional relevante del mismo archivo/oferta.
+- El alcance comercial es EXCLUSIVAMENTE: computadores, notebook/laptop/portatil,
+  desktop/escritorio/PC, all-in-one/AIO, workstation, monitores e impresoras o
+  multifuncionales.
+- Excluye siempre televisores, TV, Smart TV, proyectores, tablets, celulares,
+  servidores, storage, switches, routers, redes, accesorios, teclado, mouse,
+  docking, cables, racks, tintas, toner, cartuchos, repuestos, licencias,
+  garantias, instalaciones y servicios, aunque aparezcan junto a un equipo.
 - No devuelvas como productos independientes las especificaciones de un equipo:
     procesador, RAM, SSD, HDD, disco, puertos, conectividad, sistema operativo,
-    fuente de poder, garantia o servicios. Tampoco devuelvas servidores, storage,
-    switches, routers, redes, cables, racks ni servicios de instalacion.
-- En cada producto agrega "categoria": "equipo|monitor|impresora|consumible|complemento".
+  fuente de poder, garantia o servicios.
+- En cada producto agrega "categoria": "equipo|monitor|impresora".
 
 PISTAS DE PRODUCTOS:
 {pistas_producto}
@@ -83,7 +88,7 @@ Devuelve SOLO JSON valido:
       "precio_unitario": null,
       "precio_total": null,
       "moneda": "CLP|USD|UTM|null",
-      "categoria": "equipo|monitor|impresora|consumible|complemento|null",
+      "categoria": "equipo|monitor|impresora|null",
       "fuente_producto": "archivo o null",
       "fuente_precio": "archivo o null",
       "confianza": "alta|media|baja"
@@ -96,16 +101,17 @@ REGLAS:
 - Une solamente cuando item, orden, descripcion, cantidad o modelo permitan una correspondencia razonable.
 - No confundas el total general del proveedor con un precio unitario.
 - Si no puedes unir un precio con seguridad, conserva el producto con precio null.
-- Si hay total de linea y cantidad, calcula precio_unitario = total/cantidad.
+- Si hay total DE LA MISMA LINEA y cantidad, calcula precio_unitario = total/cantidad.
 - Busca la cantidad en todos los documentos de la oferta, incluso si aparece solo
     en el tecnico o en el nombre del item. Combina esa cantidad con el precio del
     economico cuando la correspondencia sea razonable.
 - La cantidad puede estar en el anexo tecnico, el precio unitario y total en el
     economico, y la marca/modelo en otro documento del mismo proveedor: combina
     esas fuentes cuando describan el mismo equipo.
-- Distingue equipo principal de complementos. Conserva un complemento solo si
-    tiene precio propio o ayuda a explicar el paquete; no lo mezcles con el precio
-    del equipo si el documento no dice que esta incluido.
+- Devuelve exclusivamente computadores, notebooks/laptops, desktops, all-in-one/AIO,
+  workstations, monitores e impresoras/multifuncionales. Excluye siempre TV,
+  Smart TV, accesorios, consumibles, instalaciones, servicios y cualquier otro
+  producto, aunque tenga precio propio o forme parte de un paquete.
 - Si el total y el precio unitario corresponden a la misma oferta, infiere una
     cantidad entera solo cuando la division sea consistente y marca su origen.
 - No inventes productos ni precios.

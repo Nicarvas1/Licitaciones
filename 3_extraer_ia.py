@@ -563,12 +563,15 @@ PATRON_EQUIPO_RELEVANTE = re.compile(
     r"desktop|escritorio|\bpc\b|computador(?:a)?|workstation|thinkcentre|"
     r"thinkpad|prodesk|optiplex|latitude|pavilion", re.I
 )
-PATRON_MONITOR = re.compile(r"monitor|display|pantalla", re.I)
-PATRON_IMPRESORA = re.compile(r"impresora|multifuncional|plotter", re.I)
-PATRON_CONSUMIBLE = re.compile(r"tinta|toner|t[oó]ner|cartucho|tambor", re.I)
-PATRON_COMPLEMENTO = re.compile(
-    r"teclado|mouse|rat[oó]n|docking|dock|base de expansi[oó]n", re.I
+PATRON_EXCLUIDO = re.compile(
+    r"\b(?:smart\s*)?t\.?v\.?\b|televisor|proyector|tablet|celular|smartphone|"
+    r"servidor|storage|switch|router|access point|\bred\b|rack|cable|"
+    r"teclado|mouse|rat[oó]n|docking|dock|base de expansi[oó]n|"
+    r"tinta|t[oó]ner|cartucho|tambor|repuesto|licencia|instalaci[oó]n|servicio",
+    re.I
 )
+PATRON_MONITOR = re.compile(r"monitor|display", re.I)
+PATRON_IMPRESORA = re.compile(r"impresora|multifuncional|plotter", re.I)
 PATRON_ESPECIFICACION = re.compile(
     r"procesador|cpu|\bram\b|memoria(?:\s+(?:ram|ddr))?|\bssd\b|\bhdd\b|"
     r"disco(?:\s+duro)?|puertos?|conectividad|sistema operativo|windows|"
@@ -579,20 +582,18 @@ PATRON_ESPECIFICACION = re.compile(
 
 def clasificar_producto(producto):
     texto = " ".join(str(producto.get(c) or "") for c in ("producto", "modelo", "categoria"))
+    if PATRON_EQUIPO_RELEVANTE.search(texto):
+        return "equipo"
+    if PATRON_EXCLUIDO.search(texto):
+        return None
     if PATRON_ESPECIFICACION.search(texto) and not any(
         patron.search(texto) for patron in (PATRON_EQUIPO_RELEVANTE, PATRON_MONITOR, PATRON_IMPRESORA)
     ):
         return None
-    if PATRON_EQUIPO_RELEVANTE.search(texto):
-        return "equipo"
     if PATRON_MONITOR.search(texto):
         return "monitor"
     if PATRON_IMPRESORA.search(texto):
         return "impresora"
-    if PATRON_CONSUMIBLE.search(texto):
-        return "consumible"
-    if PATRON_COMPLEMENTO.search(texto):
-        return "complemento"
     return None
 
 
@@ -603,14 +604,7 @@ def filtrar_productos_relevantes(productos):
         if categoria:
             producto["categoria"] = categoria
             clasificados.append(producto)
-    tiene_principal = any(
-        producto["categoria"] in {"equipo", "monitor", "impresora", "consumible"}
-        for producto in clasificados
-    )
-    return [
-        producto for producto in clasificados
-        if producto["categoria"] != "complemento" or tiene_principal
-    ]
+    return clasificados
 
 
 def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
