@@ -30,6 +30,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 
@@ -172,6 +173,14 @@ REGLAS:
 HALLAZGOS PARCIALES:
 {parciales}
 '''
+
+from prompts_extraccion import (
+    PROMPT_ARCHIVO as PROMPT_ARCHIVO_COMPARTIDO,
+    PROMPT_CONSOLIDAR as PROMPT_CONSOLIDAR_COMPARTIDO,
+)
+
+PROMPT_ARCHIVO = PROMPT_ARCHIVO_COMPARTIDO
+PROMPT_CONSOLIDAR = PROMPT_CONSOLIDAR_COMPARTIDO
 
 PATRON_PRODUCTO = re.compile(
     r"notebook|computador|laptop|all.?in.?one|\baio\b|desktop|monitor|impresora|"
@@ -429,7 +438,7 @@ def parsear_json(respuesta):
         return None, f"json_invalido: {exc}"
 
 
-def consultar_modelo(prompt, modelo, timeout, num_ctx, backend="ollama"):
+def consultar_modelo(prompt, modelo, timeout, num_ctx, backend="ollama", max_tokens=4096):
     if backend == "lmstudio":
         payload = {
             "model": modelo,
@@ -437,8 +446,9 @@ def consultar_modelo(prompt, modelo, timeout, num_ctx, backend="ollama"):
                 {"role": "system", "content": "Devuelve exclusivamente un objeto JSON valido."},
                 {"role": "user", "content": prompt}
             ],
-            "temperature": 0.1,
-            "max_tokens": 1200,
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+            "reasoning_effort": "none",
             "stream": False,
             "response_format": {"type": "text"}
         }
@@ -619,8 +629,10 @@ def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
         texto=texto_reducido
     )
     datos, estado, cruda, consumo = consultar_modelo(
-        prompt, args.modelo, args.timeout, args.num_ctx, args.backend
+        prompt, args.modelo, args.timeout, args.num_ctx, args.backend, args.max_tokens
     )
+    if args.pausa_archivo > 0:
+        time.sleep(args.pausa_archivo)
     productos = []
     if isinstance(datos, dict) and isinstance(datos.get("productos"), list):
         for producto in datos["productos"]:
@@ -633,7 +645,7 @@ def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
 
 def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
     if not parciales or args.sin_consolidar:
-        return parciales, "omitida", "", ""
+        return parciales, "omitida", "", "", {}
     resumen = json.dumps(parciales, ensure_ascii=False, separators=(",", ":"))
     if len(resumen) > args.max_chars_consolidacion:
         resumen = resumen[:args.max_chars_consolidacion]
@@ -644,8 +656,10 @@ def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
         parciales=resumen
     )
     datos, estado, cruda, consumo = consultar_modelo(
-        prompt, args.modelo, args.timeout, args.num_ctx, args.backend
+        prompt, args.modelo, args.timeout, args.num_ctx, args.backend, args.max_tokens
     )
+    if args.pausa_archivo > 0:
+        time.sleep(args.pausa_archivo)
     consolidados = []
     if isinstance(datos, dict) and isinstance(datos.get("productos"), list):
         for producto in datos["productos"]:
@@ -813,6 +827,18 @@ def main():
     parser.add_argument("--max-chars-consolidacion", type=int, default=12000)
     parser.add_argument("--num-ctx", type=int, default=8192)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--limite-licitaciones", type=int,
+                        help="Procesa como maximo esta cantidad de licitaciones")
+    parser.add_argument("--limite-proveedores", type=int,
+                        help="Procesa como maximo esta cantidad de proveedores por licitacion")
+    parser.add_argument("--pausa-licitacion", type=int, default=0,
+                        help="Pausa en segundos despues de cada licitacion")
+    parser.add_argument("--pausa-archivo", type=int, default=0,
+                        help="Pausa en segundos entre llamadas al modelo")
+    parser.add_argument("--max-tokens", type=int, default=2048,
+                        help="Maximo de tokens generados por llamada LM Studio")
+    parser.add_argument("--proveedor",
+                        help="Procesa solo el proveedor cuyo nombre coincide con la carpeta")
     parser.add_argument("--metadata-csv", default=str(Path(__file__).resolve().with_name("para_scrapear.csv")),
                         help="CSV con codigo, nombre y fecha_publicacion")
     args = parser.parse_args()
@@ -824,10 +850,15 @@ def main():
 
     seven_zip = encontrar_7zip(args.seven_zip)
     licitaciones = detectar_licitaciones(raiz)
+    if args.limite_licitaciones is not None:
+        if args.limite_licitaciones < 1:
+            sys.exit("--limite-licitaciones debe ser mayor que cero")
+        licitaciones = licitaciones[:args.limite_licitaciones]
     metadata_licitaciones = cargar_metadata_licitaciones(args.metadata_csv)
     todos = []
     consumos = []
     resumenes = []
+    archivos_ocr = []
 
     print("=" * 74)
     print(f"EXTRACCION IA v4 | backend={args.backend} | modelo={args.modelo} | licitaciones={len(licitaciones)}")
@@ -841,6 +872,16 @@ def main():
             carpeta for carpeta in licitacion.iterdir()
             if carpeta.is_dir() and not carpeta.name.startswith("_")
         ]
+        if args.proveedor:
+            oferentes = [carpeta for carpeta in oferentes if carpeta.name == args.proveedor]
+            if not oferentes:
+                sys.exit(
+                    f"No se encontro el proveedor '{args.proveedor}' en {licitacion}"
+                )
+        if args.limite_proveedores is not None:
+            if args.limite_proveedores < 1:
+                sys.exit("--limite-proveedores debe ser mayor que cero")
+            oferentes = oferentes[:args.limite_proveedores]
         if not oferentes:
             continue
 
@@ -866,6 +907,14 @@ def main():
                 detener = True
                 break
             resultados.append(resultado)
+            archivos_ocr.extend(
+                {
+                    "licitacion": licitacion.name,
+                    "proveedor": resultado["proveedor"],
+                    "archivo": archivo,
+                }
+                for archivo in resultado.get("necesita_ocr", [])
+            )
             contexto = metadata_licitaciones.get(licitacion.name, {})
             llamadas = 0
             for archivo in resultado["resultados_archivos"]:
@@ -935,6 +984,9 @@ def main():
             salida.write_text(json.dumps(resultados, ensure_ascii=False, indent=2), encoding="utf-8")
         if detener:
             break
+        if args.pausa_licitacion > 0 and licitacion != licitaciones[-1]:
+            print(f"Pausa de {args.pausa_licitacion} segundos para enfriar el equipo...")
+            time.sleep(args.pausa_licitacion)
 
     ruta_excel = Path(args.excel) if args.excel else raiz / "resultado_productos.xlsx"
     if todos:
@@ -943,6 +995,12 @@ def main():
     print("\n" + "=" * 74)
     print(f"Productos consolidados: {len(todos)}")
     print(f"Excel: {ruta_excel if todos else 'no generado'}")
+    print(f"Archivos que requieren OCR: {len(archivos_ocr)}")
+    for archivo_ocr in archivos_ocr:
+        print(
+            f"  - {archivo_ocr['licitacion']} | "
+            f"{archivo_ocr['proveedor']} | {archivo_ocr['archivo']}"
+        )
     print("=" * 74)
 
 

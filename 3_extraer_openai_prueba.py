@@ -181,6 +181,14 @@ HALLAZGOS PARCIALES:
 {parciales}
 '''
 
+from prompts_extraccion import (
+    PROMPT_ARCHIVO as PROMPT_ARCHIVO_COMPARTIDO,
+    PROMPT_CONSOLIDAR as PROMPT_CONSOLIDAR_COMPARTIDO,
+)
+
+PROMPT_ARCHIVO = PROMPT_ARCHIVO_COMPARTIDO
+PROMPT_CONSOLIDAR = PROMPT_CONSOLIDAR_COMPARTIDO
+
 PATRON_PRODUCTO = re.compile(
     r"notebook|computador|laptop|all.?in.?one|\baio\b|desktop|monitor|impresora|"
     r"workstation|servidor|pc\b|equipo|modelo|procesador|ryzen|core\s*i[3579]|"
@@ -439,7 +447,7 @@ def parsear_json(respuesta):
         return None, f"json_invalido: {exc}"
 
 
-def consultar_openai(prompt, modelo, timeout, num_ctx=None):
+def consultar_openai(prompt, modelo, timeout, num_ctx=None, max_tokens=2048):
     """Llama a OpenAI con JSON mode. La clave se lee de OPENAI_API_KEY."""
     api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
     if not api_key:
@@ -454,7 +462,7 @@ def consultar_openai(prompt, modelo, timeout, num_ctx=None):
             ],
             response_format={"type": "json_object"},
             temperature=0,
-            max_tokens=1600
+            max_tokens=max_tokens
         )
         cruda = respuesta.choices[0].message.content or ""
         datos, estado = parsear_json(cruda)
@@ -596,7 +604,9 @@ def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
         pistas_precio="\n".join(precios_pista) or "(ninguna)",
         texto=texto_reducido
     )
-    datos, estado, cruda, consumo = consultar_openai(prompt, args.modelo, args.timeout, args.num_ctx)
+    datos, estado, cruda, consumo = consultar_openai(
+        prompt, args.modelo, args.timeout, args.num_ctx, args.max_tokens
+    )
     productos = []
     if isinstance(datos, dict) and isinstance(datos.get("productos"), list):
         for producto in datos["productos"]:
@@ -619,7 +629,9 @@ def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
         total_oferta=total_oferta or "no informado",
         parciales=resumen
     )
-    datos, estado, cruda, consumo = consultar_openai(prompt, args.modelo, args.timeout, args.num_ctx)
+    datos, estado, cruda, consumo = consultar_openai(
+        prompt, args.modelo, args.timeout, args.num_ctx, args.max_tokens
+    )
     consolidados = []
     if isinstance(datos, dict) and isinstance(datos.get("productos"), list):
         for producto in datos["productos"]:
@@ -933,6 +945,7 @@ def main():
     parser.add_argument("--max-chars-consolidacion", type=int, default=12000)
     parser.add_argument("--num-ctx", type=int, default=8192)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--max-tokens", type=int, default=2048)
     parser.add_argument("--metadata-csv", default=str(Path(__file__).resolve().with_name("para_scrapear.csv")),
                         help="CSV con codigo, nombre y fecha_publicacion")
     parser.add_argument("--proveedor", help="Texto contenido en nombre/RUT de un proveedor")
