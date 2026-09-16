@@ -19,8 +19,12 @@ Devuelve SOLO JSON valido:
       "cantidad_fuente": "explicita|inferida_total_dividido_unitario|null",
       "precio_unitario": null,
       "precio_total": null,
+      "precio_total_tipo": "linea|oferta|null",
       "moneda": "CLP|USD|UTM|null",
       "categoria": "equipo|monitor|impresora|null",
+      "pagina": null,
+      "fila_fuente": "identificador de fila o null",
+      "evidencia": "texto literal breve que respalda producto, cantidad y precio",
       "confianza": "alta|media|baja"
     }}
   ],
@@ -42,8 +46,17 @@ REGLAS:
 - Si solo aparece un total general de la oferta, no lo asignes a ningun producto.
 - Si solo aparece un precio total de linea pero no hay cantidad comprobable, conserva
   precio_total y devuelve precio_unitario null.
+- Marca precio_total_tipo como "linea" solo cuando el total pertenece expresamente
+  a esa fila; usa "oferta" para totales netos/finales generales.
 - No uses IVA, subtotal ni total general como producto o precio unitario.
 - No inventes. Usa null cuando el dato no aparece.
+- Copia en evidencia el fragmento literal que respalda los valores. Si producto,
+  cantidad y precio provienen de lugares distintos, indicalos brevemente.
+- Las lineas marcadas como FILA dentro de una TABLA conservan columnas separadas
+  por || y son la fuente preferente para asociar producto, cantidad y precios.
+- Si aparece "tabla(s) sin columnas recuperables", no interpretes secuencias de
+  digitos separadas por espacios como cantidad o precio salvo que otra parte
+  estructurada del documento confirme exactamente esos valores.
 - Si no hay productos, devuelve {{"productos": [], "observaciones": "motivo"}}.
 - El alcance comercial es EXCLUSIVAMENTE: computadores, notebook/laptop/portatil,
   desktop/escritorio/PC, all-in-one/AIO, workstation, monitores e impresoras o
@@ -87,10 +100,12 @@ Devuelve SOLO JSON valido:
       "cantidad_fuente": "explicita|inferida_total_dividido_unitario|null",
       "precio_unitario": null,
       "precio_total": null,
+      "precio_total_tipo": "linea|oferta|null",
       "moneda": "CLP|USD|UTM|null",
       "categoria": "equipo|monitor|impresora|null",
       "fuente_producto": "archivo o null",
       "fuente_precio": "archivo o null",
+      "evidencia": "texto literal breve que respalda la union",
       "confianza": "alta|media|baja"
     }}
   ],
@@ -100,7 +115,16 @@ Devuelve SOLO JSON valido:
 REGLAS:
 - Une solamente cuando item, orden, descripcion, cantidad o modelo permitan una correspondencia razonable.
 - No confundas el total general del proveedor con un precio unitario.
+- Nunca uses un precio_total_tipo "oferta" para inferir cantidad o precio unitario.
 - Si no puedes unir un precio con seguridad, conserva el producto con precio null.
+- No cambies cifras para hacerlas coincidir. Conserva la evidencia literal y usa
+  confianza baja cuando existan fuentes contradictorias.
+- Cuando dos documentos repitan el mismo item, devuelve una sola fila. Prioriza
+  la fuente con columnas separadas por || y valores que cumplan cantidad por
+  precio unitario igual a total de linea.
+- La suma de productos no puede superar el total de la oferta. Si las fuentes
+  no permiten resolver una contradiccion, devuelve una sola fila con los campos
+  dudosos en null y confianza baja, en vez de conservar duplicados incompatibles.
 - Si hay total DE LA MISMA LINEA y cantidad, calcula precio_unitario = total/cantidad.
 - Busca la cantidad en todos los documentos de la oferta, incluso si aparece solo
     en el tecnico o en el nombre del item. Combina esa cantidad con el precio del

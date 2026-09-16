@@ -33,7 +33,7 @@ import zipfile
 from pathlib import Path
 
 try:
-    import fitz
+    import pymupdf as fitz
     import pdfplumber
     import requests
     from openai import OpenAI
@@ -539,9 +539,10 @@ PATRON_EQUIPO_RELEVANTE = re.compile(
     r"desktop|escritorio|\bpc\b|computador(?:a)?|workstation|thinkcentre|"
     r"thinkpad|prodesk|optiplex|latitude|pavilion", re.I
 )
+PATRON_TV = re.compile(r"\b(?:smart\s*)?t\.?v\.?\b|televisor", re.I)
 PATRON_EXCLUIDO = re.compile(
-    r"\b(?:smart\s*)?t\.?v\.?\b|televisor|proyector|tablet|celular|smartphone|"
-    r"servidor|storage|switch|router|access point|\bred\b|rack|cable|"
+    r"proyector|tablet|celular|smartphone|servidor|storage|switch|router|"
+    r"access point|\bred\b|rack|cable|"
     r"teclado|mouse|rat[oó]n|docking|dock|base de expansi[oó]n|"
     r"tinta|t[oó]ner|cartucho|tambor|repuesto|licencia|instalaci[oó]n|servicio",
     re.I
@@ -558,6 +559,8 @@ PATRON_ESPECIFICACION = re.compile(
 
 def clasificar_producto(producto):
     texto = " ".join(str(producto.get(c) or "") for c in ("producto", "modelo", "categoria"))
+    if PATRON_TV.search(texto):
+        return None
     if PATRON_EQUIPO_RELEVANTE.search(texto):
         return "equipo"
     if PATRON_EXCLUIDO.search(texto):
@@ -570,6 +573,9 @@ def clasificar_producto(producto):
         return "monitor"
     if PATRON_IMPRESORA.search(texto):
         return "impresora"
+    categoria_declarada = str(producto.get("categoria") or "").strip().lower()
+    if categoria_declarada in {"equipo", "monitor", "impresora"}:
+        return categoria_declarada
     return None
 
 

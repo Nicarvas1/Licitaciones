@@ -5,6 +5,8 @@ playwright==1.62.0
 # Extraccion de documentos y generacion de Excel
 PyMuPDF==1.28.2
 pdfplumber==0.11.10
+pytesseract==0.3.13
+Pillow==12.3.0
 requests==2.34.2
 python-docx==1.2.0
 openpyxl==3.1.5

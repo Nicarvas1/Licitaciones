@@ -110,17 +110,64 @@ ollama run gpt-oss:20b "Responde SOLO con JSON valido: {\"ok\": true}"
 ```
 
 El extractor local no necesita `OPENAI_API_KEY`: se comunica con Ollama en
-`http://127.0.0.1:11434`. Genera `extraccion_ia.json` dentro de la licitacion y
+`http://127.0.0.1:11434` o con LM Studio en `http://127.0.0.1:1234`. Genera
+`extraccion_ia.json` dentro de la licitacion y
 un Excel con las mismas columnas principales del reporte OpenAI, incluyendo
 nombre, fecha de publicacion, estado y organismo. `--sin-consolidar` hace que
 la comparacion sea mas pareja, porque analiza los archivos sin una segunda
 llamada de consolidacion.
 
-Los extractores filtran el resultado a productos relevantes para computo:
-notebooks, desktops/PC, AIO, workstations, monitores, impresoras y
-consumibles de impresion. RAM, SSD, procesadores, puertos, sistemas operativos,
-servidores, switches y servicios quedan fuera. Teclados, mouse y docks solo se
-conservan cuando acompañan a un equipo relevante de la misma oferta.
+Los extractores filtran el resultado exclusivamente a computadores, notebooks,
+desktops/PC, AIO, workstations, monitores e impresoras/multifuncionales. TV,
+Smart TV, accesorios, consumibles, instalaciones, servicios y productos no
+relacionados quedan fuera.
+
+El extractor local procesa archivos y proveedores secuencialmente. Los documentos
+largos se dividen en fragmentos con solapamiento para no perder filas ni aumentar
+el contexto de una sola llamada. El Excel contiene:
+
+- `Productos`: todos los productos dentro del alcance, con evidencia y alertas.
+- `Productos_validos`: solo registros completos y sin inconsistencias detectadas.
+- `Alertas`: filas o proveedores que requieren revision.
+- `Consumo`: llamadas y tokens reportados por LM Studio u Ollama.
+- `Resumen`: cobertura por proveedor, OCR y errores del modelo.
+
+Cada corrida también genera un archivo `.log.jsonl`. Si el equipo se reinicia,
+ejecuta nuevamente el mismo comando sin `--rehacer`; se conservan los proveedores
+terminados y se retoman los pendientes o fallidos.
+
+Para activar OCR en Windows instala Tesseract y las dependencias Python:
+
+```powershell
+winget install --id UB-Mannheim.TesseractOCR -e
+pip install -r requirements.txt
+```
+
+Si Tesseract no queda en `PATH`, usa
+`--tesseract-cmd "C:\Program Files\Tesseract-OCR\tesseract.exe"`.
+
+Prueba recomendada de 10 licitaciones, una a la vez, con LM Studio:
+
+```powershell
+python .\3_extraer_ia.py `
+  --dir ".\lotes\2025-11\ofertas" `
+  --backend lmstudio `
+  --modelo "qwen/qwen3.6-35b-a3b" `
+  --metadata-csv ".\lotes\2025-11\para_scrapear.csv" `
+  --excel ".\lotes\2025-11\prueba_local_10.xlsx" `
+  --limite-licitaciones 10 `
+  --num-ctx 8192 `
+  --max-tokens 4096 `
+  --timeout 600 `
+  --reintentos-modelo 2 `
+  --pausa-archivo 2 `
+  --ocr `
+  --rehacer
+```
+
+Usa `--rehacer` solo en el primer intento de una prueba que deba reemplazar
+resultados anteriores. Para reanudar después de una interrupcion, repite el
+mismo comando quitando `--rehacer`.
 
 Para regenerar un Excel OpenAI ya existente con este filtro, sin volver a llamar
 a la API, ejecuta el extractor sin `--rehacer` y usa otro nombre de salida:
