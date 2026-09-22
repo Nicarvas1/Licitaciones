@@ -1540,9 +1540,6 @@ def main():
                     if archivo.get("observaciones"):
                         print(f"        observacion: {str(archivo['observaciones'])[:180]}")
             for producto in resultado["productos"]:
-                todos.append({"codigo": licitacion.name,
-                              **metadata_licitaciones.get(licitacion.name, {}),
-                              **producto})
                 print(f"    - {producto['producto'][:55]} | unitario={producto['precio_unitario']}")
 
             # checkpoint por proveedor para no perder el avance si Ollama cae

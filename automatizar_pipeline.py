@@ -22,7 +22,7 @@ from openpyxl.styles import Font, PatternFill
 RAIZ_PROYECTO = Path(__file__).resolve().parent
 SCRIPT_FILTRAR = RAIZ_PROYECTO / "1_filtrar_licitaciones.py"
 SCRIPT_SCRAPER = RAIZ_PROYECTO / "2_scraper_ofertas.py"
-SCRIPT_OPENAI = RAIZ_PROYECTO / "3_extraer_openai_prueba.py"
+SCRIPT_IA = RAIZ_PROYECTO / "3_extraer_ia.py"
 ESTADOS_PRESERVAR = {
     "scraping_estado", "ia_estado", "n_ofertas", "n_archivos",
     "ia_proveedores", "ia_tokens", "ia_errores"
@@ -223,7 +223,7 @@ def actualizar_estado_ia(ruta_csv, carpeta_ofertas):
     for fila in filas:
         codigo = (fila.get("codigo") or "").strip()
         carpeta = carpeta_ofertas / codigo
-        salida = carpeta / "extraccion_openai.json"
+        salida = carpeta / "extraccion_ia.json"
         if not salida.is_file():
             continue
         try:
@@ -339,7 +339,16 @@ def main():
     parser.add_argument("--in", dest="entradas", nargs="+", required=True,
                         help="CSV(s) descargados desde Mercado Publico")
     parser.add_argument("--salida", default="lotes", help="Carpeta de lotes mensuales")
-    parser.add_argument("--modelo", default="gpt-4.1-mini")
+    parser.add_argument("--backend", choices=("ollama", "lmstudio"), default="ollama")
+    parser.add_argument("--modelo", default="llama3.2")
+    parser.add_argument("--num-ctx", type=int, default=8192)
+    parser.add_argument("--max-tokens", type=int, default=4096)
+    parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--reintentos-modelo", type=int, default=2)
+    parser.add_argument("--espera-reintento", type=int, default=5)
+    parser.add_argument("--pausa-archivo", type=int, default=0)
+    parser.add_argument("--pausa-licitacion", type=int, default=0)
+    parser.add_argument("--debug", action="store_true")
     parser.add_argument("--desde", help="Primer mes incluido, formato YYYY-MM")
     parser.add_argument("--hasta", help="Ultimo mes incluido, formato YYYY-MM")
     parser.add_argument("--solo-preparar", action="store_true",
@@ -410,13 +419,22 @@ def main():
                 continue
 
             comando = [
-                sys.executable, str(SCRIPT_OPENAI),
+                sys.executable, str(SCRIPT_IA),
                 "--dir", str(carpeta_ofertas),
+                "--backend", args.backend,
                 "--modelo", args.modelo,
-                "--limite-proveedores", "0",
                 "--metadata-csv", str(csv_mes),
-                "--excel", str(carpeta / "resultados_openai.xlsx")
+                "--excel", str(carpeta / "resultados_openai.xlsx"),
+                "--num-ctx", str(args.num_ctx),
+                "--max-tokens", str(args.max_tokens),
+                "--timeout", str(args.timeout),
+                "--reintentos-modelo", str(args.reintentos_modelo),
+                "--espera-reintento", str(args.espera_reintento),
+                "--pausa-archivo", str(args.pausa_archivo),
+                "--pausa-licitacion", str(args.pausa_licitacion)
             ]
+            if args.debug:
+                comando.append("--debug")
             if args.sin_consolidar:
                 comando.append("--sin-consolidar")
             if args.rehacer_ia:

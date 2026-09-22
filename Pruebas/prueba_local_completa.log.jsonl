@@ -1,0 +1,30 @@
+{"fecha": "2026-09-16T17:03:33", "evento": "inicio_corrida", "directorio": "lotes\\2025-11\\ofertas\\1057062-13-LE25", "backend": "lmstudio", "modelo": "qwen/qwen3.6-35b-a3b", "licitaciones": 1}
+{"fecha": "2026-09-16T17:03:33", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "*COMERCIAL SF E.I.R.L.", "rut": "76.080.334-0"}
+{"fecha": "2026-09-16T17:05:00", "evento": "inicio_corrida", "directorio": "lotes\\2025-11\\ofertas\\1057062-13-LE25", "backend": "lmstudio", "modelo": "qwen/qwen3.6-35b-a3b", "licitaciones": 1}
+{"fecha": "2026-09-16T17:05:00", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "*COMERCIAL SF E.I.R.L.", "rut": "76.080.334-0"}
+{"fecha": "2026-09-16T17:05:35", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "*COMERCIAL SF E.I.R.L.", "rut": "76.080.334-0", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:05:35", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "MYBOX COMPUTACION SPA", "rut": "76.132.603-1"}
+{"fecha": "2026-09-16T17:06:05", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "MYBOX COMPUTACION SPA", "rut": "76.132.603-1", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 1}
+{"fecha": "2026-09-16T17:06:05", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "importadora newark", "rut": "76.244.740-1"}
+{"fecha": "2026-09-16T17:06:31", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "importadora newark", "rut": "76.244.740-1", "productos": 1, "productos_validos": 0, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:06:31", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "ALCA LTDA", "rut": "76.596.570-5"}
+{"fecha": "2026-09-16T17:07:14", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "ALCA LTDA", "rut": "76.596.570-5", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:07:14", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Cobrotech", "rut": "76.819.088-7"}
+{"fecha": "2026-09-16T17:07:42", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Cobrotech", "rut": "76.819.088-7", "productos": 1, "productos_validos": 0, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:07:42", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "OMA", "rut": "77.072.745-6"}
+{"fecha": "2026-09-16T17:08:24", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "OMA", "rut": "77.072.745-6", "productos": 1, "productos_validos": 0, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:08:24", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "COMERCIALIZADORA SANTA CATALINA", "rut": "77.474.803-2"}
+{"fecha": "2026-09-16T17:08:56", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "COMERCIALIZADORA SANTA CATALINA", "rut": "77.474.803-2", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:08:56", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Comercial Austin", "rut": "77.624.823-1"}
+{"fecha": "2026-09-16T17:09:37", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Comercial Austin", "rut": "77.624.823-1", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:09:37", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "CRIMA SPA", "rut": "77.698.377-2"}
+{"fecha": "2026-09-16T17:09:37", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "CRIMA SPA", "rut": "77.698.377-2", "productos": 0, "productos_validos": 0, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:09:37", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "CHIVENSU SPA", "rut": "77.741.502-6"}
+{"fecha": "2026-09-16T17:10:29", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "CHIVENSU SPA", "rut": "77.741.502-6", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:10:29", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "PC FACTORY", "rut": "78.885.550-8"}
+{"fecha": "2026-09-16T17:11:34", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "PC FACTORY", "rut": "78.885.550-8", "productos": 1, "productos_validos": 0, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:11:34", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Tecnodata", "rut": "96.504.550-3"}
+{"fecha": "2026-09-16T17:12:15", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Tecnodata", "rut": "96.504.550-3", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 0}
+{"fecha": "2026-09-16T17:12:15", "evento": "inicio_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Technosystems Chile Spa.", "rut": "96.678.350-8"}
+{"fecha": "2026-09-16T17:13:17", "evento": "fin_proveedor", "licitacion": "1057062-13-LE25", "proveedor": "Technosystems Chile Spa.", "rut": "96.678.350-8", "productos": 1, "productos_validos": 1, "errores_modelo": 0, "ocr": 2}
+{"fecha": "2026-09-16T17:13:17", "evento": "fin_corrida", "productos": 24, "productos_validos": 16, "archivos_ocr": 3, "detenida": false}
