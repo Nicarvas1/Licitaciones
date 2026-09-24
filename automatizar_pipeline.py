@@ -23,6 +23,10 @@ RAIZ_PROYECTO = Path(__file__).resolve().parent
 SCRIPT_FILTRAR = RAIZ_PROYECTO / "1_filtrar_licitaciones.py"
 SCRIPT_SCRAPER = RAIZ_PROYECTO / "2_scraper_ofertas.py"
 SCRIPT_IA = RAIZ_PROYECTO / "3_extraer_ia.py"
+# Excel mensual del extractor local. Los lotes antiguos pueden tener el nombre
+# historico resultados_openai.xlsx; se leen como respaldo al consolidar.
+NOMBRE_EXCEL_MES = "resultados_ia_local.xlsx"
+NOMBRE_EXCEL_HISTORICO = "resultados_openai.xlsx"
 ESTADOS_PRESERVAR = {
     "scraping_estado", "ia_estado", "n_ofertas", "n_archivos",
     "ia_proveedores", "ia_tokens", "ia_errores"
@@ -136,13 +140,30 @@ def ejecutar(comando, cwd, log):
             env=entorno
         )
         assert proceso.stdout is not None
-        for linea in proceso.stdout:
-            salida_segura = linea.encode(
-                sys.stdout.encoding or "utf-8", errors="replace"
-            ).decode(sys.stdout.encoding or "utf-8", errors="replace")
-            print(salida_segura, end="")
-            archivo_log.write(linea)
-        return proceso.wait()
+
+        def reenviar_salida():
+            for linea in proceso.stdout:
+                salida_segura = linea.encode(
+                    sys.stdout.encoding or "utf-8", errors="replace"
+                ).decode(sys.stdout.encoding or "utf-8", errors="replace")
+                print(salida_segura, end="")
+                archivo_log.write(linea)
+
+        try:
+            reenviar_salida()
+            return proceso.wait()
+        except KeyboardInterrupt:
+            # Ctrl+C tambien le llega al proceso hijo, que se detiene ordenadamente
+            # (cancela lo pendiente y guarda checkpoints). Se sigue leyendo su salida
+            # hasta que termine; un segundo Ctrl+C lo fuerza a cerrar.
+            print("\nCtrl+C: esperando que el paso actual se detenga y guarde su avance...")
+            try:
+                reenviar_salida()
+                proceso.wait()
+            except KeyboardInterrupt:
+                proceso.kill()
+                proceso.wait()
+            raise
 
 
 def expandir_entradas(patrones):
@@ -242,7 +263,8 @@ def actualizar_estado_ia(ruta_csv, carpeta_ofertas):
             for archivo in resultado.get("resultados_archivos", []):
                 if es_error_ia(archivo.get("estado_ia")):
                     errores += 1
-                tokens += int((archivo.get("consumo_openai") or {}).get("total_tokens") or 0)
+                consumo = archivo.get("consumo_local") or archivo.get("consumo_openai") or {}
+                tokens += int(consumo.get("total_tokens") or 0)
             if es_error_ia(resultado.get("estado_consolidacion")):
                 errores += 1
             tokens += int((resultado.get("consumo_consolidacion") or {}).get("total_tokens") or 0)
@@ -261,12 +283,18 @@ def actualizar_estado_ia(ruta_csv, carpeta_ofertas):
 
 
 def consolidar_reportes(salida, meses):
-    reportes = [salida / mes / "resultados_openai.xlsx" for mes in meses]
-    reportes = [ruta for ruta in reportes if ruta.is_file()]
+    reportes = []
+    for mes in meses:
+        actual = salida / mes / NOMBRE_EXCEL_MES
+        historico = salida / mes / NOMBRE_EXCEL_HISTORICO
+        if actual.is_file():
+            reportes.append(actual)
+        elif historico.is_file():
+            reportes.append(historico)
     if not reportes:
         return None
 
-    hojas = {"Productos": [], "Resumen": [], "Consumo": []}
+    hojas = {"Productos": [], "Productos_validos": [], "Alertas": [], "Resumen": [], "Consumo": []}
     cabeceras = {}
     for ruta in reportes:
         libro = load_workbook(ruta, read_only=True, data_only=True)
@@ -288,7 +316,11 @@ def consolidar_reportes(salida, meses):
 
     if hojas["Resumen"]:
         columnas_suma = {
-            "proveedores_procesados", "productos", "llamadas_api", "errores_api",
+            # columnas del Resumen del extractor local
+            "productos", "productos_validos", "productos_revisar", "llamadas",
+            "errores_modelo", "ocr", "no_soportados",
+            # columnas de reportes historicos del comparador OpenAI
+            "proveedores_procesados", "llamadas_api", "errores_api",
             "archivos_ocr", "archivos_no_soportados", "prompt_tokens",
             "completion_tokens", "total_tokens", "cached_tokens", "reasoning_tokens"
         }
@@ -296,13 +328,16 @@ def consolidar_reportes(salida, meses):
         total["codigo"] = "TOTAL"
         total["nombre_licitacion"] = "Todos los meses"
         for campo in columnas_suma:
-            total[campo] = sum(int(fila.get(campo) or 0) for fila in hojas["Resumen"])
+            if campo in cabeceras["Resumen"]:
+                total[campo] = sum(int(fila.get(campo) or 0) for fila in hojas["Resumen"])
         hojas["Resumen"].append(total)
 
     destino = salida / "resultados_consolidados.xlsx"
     libro_salida = Workbook()
     libro_salida.remove(libro_salida.active)
-    for nombre in ("Productos", "Resumen", "Consumo"):
+    for nombre in hojas:
+        if nombre not in cabeceras:
+            continue
         hoja = libro_salida.create_sheet(nombre)
         columnas = cabeceras.get(nombre, [])
         for numero_columna, campo in enumerate(columnas, 1):
@@ -334,7 +369,8 @@ def crear_lock(salida):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Filtra, divide por mes, scrapea, extrae con OpenAI y consolida resultados."
+        description="Filtra, divide por mes, scrapea, extrae con el modelo local "
+                    "(LM Studio u Ollama) y consolida resultados."
     )
     parser.add_argument("--in", dest="entradas", nargs="+", required=True,
                         help="CSV(s) descargados desde Mercado Publico")
@@ -348,6 +384,24 @@ def main():
     parser.add_argument("--espera-reintento", type=int, default=5)
     parser.add_argument("--pausa-archivo", type=int, default=0)
     parser.add_argument("--pausa-licitacion", type=int, default=0)
+    parser.add_argument("--paralelo", type=int, default=1,
+                        help="Proveedores procesados a la vez por el extractor (ej. 4)")
+    parser.add_argument("--vision", action="store_true",
+                        help="Lee como imagen las paginas con tablas dificiles o escaneadas")
+    parser.add_argument("--dpi-vision", type=int, default=150)
+    parser.add_argument("--vision-solo-escaneadas", action="store_true")
+    parser.add_argument("--vision-paginas-por-llamada", type=int, default=3)
+    parser.add_argument("--vision-min-filas", type=int, default=2)
+    parser.add_argument("--rampa", type=float, default=5,
+                        help="Segundos entre el inicio de los primeros proveedores en paralelo")
+    parser.add_argument("--por-proveedor", action="store_true",
+                        help="Una llamada por proveedor con las paginas relevantes de todos sus anexos")
+    parser.add_argument("--max-chars-proveedor", type=int, default=24000)
+    parser.add_argument("--max-imagenes-proveedor", type=int, default=4)
+    parser.add_argument("--max-chars-archivo", type=int, default=7000,
+                        help="Tamano de cada fragmento de texto enviado al modelo")
+    parser.add_argument("--ocr", action="store_true",
+                        help="Aplica OCR a PDF sin texto extraible")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--desde", help="Primer mes incluido, formato YYYY-MM")
     parser.add_argument("--hasta", help="Ultimo mes incluido, formato YYYY-MM")
@@ -359,9 +413,9 @@ def main():
     parser.add_argument("--todos-anexos", action="store_true",
                         help="Incluye anexos administrativos en la descarga")
     parser.add_argument("--sin-consolidar", action="store_true",
-                        help="Omite la llamada OpenAI de consolidacion por proveedor")
+                        help="Omite la llamada de consolidacion por proveedor")
     parser.add_argument("--rehacer-ia", action="store_true",
-                        help="Descarta resultados OpenAI previos y vuelve a consumir tokens")
+                        help="Descarta resultados IA previos y rehace toda la inferencia local")
     args = parser.parse_args()
 
     for valor, nombre in ((args.desde, "--desde"), (args.hasta, "--hasta")):
@@ -424,15 +478,30 @@ def main():
                 "--backend", args.backend,
                 "--modelo", args.modelo,
                 "--metadata-csv", str(csv_mes),
-                "--excel", str(carpeta / "resultados_openai.xlsx"),
+                "--excel", str(carpeta / NOMBRE_EXCEL_MES),
                 "--num-ctx", str(args.num_ctx),
                 "--max-tokens", str(args.max_tokens),
                 "--timeout", str(args.timeout),
                 "--reintentos-modelo", str(args.reintentos_modelo),
                 "--espera-reintento", str(args.espera_reintento),
                 "--pausa-archivo", str(args.pausa_archivo),
-                "--pausa-licitacion", str(args.pausa_licitacion)
+                "--pausa-licitacion", str(args.pausa_licitacion),
+                "--paralelo", str(args.paralelo),
+                "--rampa", str(args.rampa),
+                "--max-chars-archivo", str(args.max_chars_archivo),
+                "--dpi-vision", str(args.dpi_vision),
+                "--vision-paginas-por-llamada", str(args.vision_paginas_por_llamada),
+                "--vision-min-filas", str(args.vision_min_filas),
             ]
+            if args.vision:
+                comando.append("--vision")
+            if args.vision_solo_escaneadas:
+                comando.append("--vision-solo-escaneadas")
+            if args.por_proveedor:
+                comando += ["--por-proveedor", "--max-chars-proveedor", str(args.max_chars_proveedor),
+                            "--max-imagenes-proveedor", str(args.max_imagenes_proveedor)]
+            if args.ocr:
+                comando.append("--ocr")
             if args.debug:
                 comando.append("--debug")
             if args.sin_consolidar:
@@ -441,7 +510,7 @@ def main():
                 comando.append("--rehacer")
             codigo = ejecutar(comando, RAIZ_PROYECTO, log)
             if codigo != 0:
-                fallos.append(f"{mes}: extractor OpenAI termino con codigo {codigo}")
+                fallos.append(f"{mes}: extractor IA local termino con codigo {codigo}")
             actualizar_estado_ia(csv_mes, carpeta_ofertas)
 
         meses_con_reporte = sorted(
@@ -464,4 +533,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

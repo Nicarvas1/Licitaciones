@@ -143,3 +143,54 @@ REGLAS:
 HALLAZGOS PARCIALES:
 {parciales}
 '''
+
+# Se antepone al texto cuando las paginas se envian como imagen (modo --vision).
+REGLAS_VISION = r'''MODO VISION: junto a este mensaje se adjuntan imagenes de paginas del archivo.
+- Las IMAGENES son la fuente principal para la estructura: lee cada tabla fila por fila
+  y asocia producto, cantidad y precios que esten en la MISMA fila de la imagen.
+- El texto extraido que viene abajo puede tener el orden de columnas mezclado. Usalo
+  solo para confirmar digitos, modelos y nombres exactos; si contradice la estructura
+  de la imagen, manda la imagen.
+- El aviso "tabla(s) sin columnas recuperables" se refiere solo al texto extraido:
+  esas tablas debes leerlas desde la imagen.
+- En "pagina" indica el numero de pagina de la imagen donde esta el producto.
+- En "fila_fuente" indica la fila visible de la tabla (por ejemplo "item 2" o "fila 3").
+- En "evidencia" transcribe brevemente lo que se ve en esa fila de la imagen.
+- Las mismas reglas de alcance, exclusiones y no inventar aplican igual.'''
+
+
+# Modo --por-proveedor: UNA llamada con las paginas relevantes de todos los anexos
+# de un proveedor. Respuesta corta (9 campos) para generar menos tokens.
+PROMPT_PROVEEDOR = r"""Extrae los equipos ofertados por UN proveedor en una licitacion publica chilena.
+Abajo vienen las paginas relevantes de sus anexos (economicos y tecnicos).{nota_imagenes}
+
+PROVEEDOR: {proveedor}
+TOTAL DE SU OFERTA SEGUN EL PORTAL: {total_oferta}
+
+Devuelve SOLO este JSON, sin texto adicional:
+{{"productos":[{{"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","archivo":"","pagina":null}}]}}
+
+REGLAS:
+- Una fila por equipo ofertado. Si el mismo equipo aparece en un anexo economico y en uno tecnico,
+  devuelvelo UNA sola vez: cantidad y precios del economico; marca y modelo de donde aparezcan.
+- Alcance: SOLO computadores, notebooks, desktop/PC, all-in-one, workstations, monitores e
+  impresoras/multifuncionales. Ignora accesorios, licencias, garantias, servicios, despacho,
+  instalacion, TV, tablets, servidores y redes, aunque tengan precio propio.
+- No devuelvas especificaciones (procesador, RAM, disco, sistema operativo) como productos.
+- precio_unitario: precio de UNA unidad. precio_total: total de ESA linea (cantidad x unitario).
+  Nunca uses el total general de la oferta, el IVA ni subtotales como precio de un producto.
+- Si hay precios con y sin IVA, usa los netos (sin IVA).
+- Montos como numeros sin puntos ni simbolos: 650.000 -> 650000.
+- archivo: nombre exacto del archivo de donde sale el precio (o el producto, si no hay precio).
+  pagina: numero de pagina.
+- No inventes: usa null si un dato no aparece. Si no hay equipos, devuelve {{"productos":[]}}.
+
+DOCUMENTOS:
+{documentos}
+"""
+
+NOTA_IMAGENES_PROVEEDOR = r"""
+Ademas se adjuntan como IMAGEN algunas paginas (tablas sin bordes o escaneadas), en este orden:
+{lista_imagenes}
+Usa la imagen para leer la estructura de la tabla (que precio va en que fila) y el texto,
+si existe, para confirmar digitos."""

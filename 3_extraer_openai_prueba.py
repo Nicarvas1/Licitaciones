@@ -30,6 +30,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 try:
@@ -953,8 +954,23 @@ def main():
                         help="Para esta prueba, procesa solo N proveedores (default 1)")
     parser.add_argument("--solo-tecnicos-fallback", action="store_true",
                         help="Procesa tecnicos y los combina con el resultado economico previo")
+    parser.add_argument("--solo-checkpoints", action="store_true",
+                        help="Genera el Excel desde JSON existentes sin llamar a OpenAI")
+    parser.add_argument("--checkpoints-desde",
+                        help="Con --solo-checkpoints, incluye JSON modificados desde esta fecha ISO")
     args = parser.parse_args()
     DEBUG = args.debug
+
+    if args.solo_checkpoints and (args.rehacer or args.solo_tecnicos_fallback):
+        parser.error("--solo-checkpoints no se combina con --rehacer/--solo-tecnicos-fallback")
+    checkpoint_desde = None
+    if args.checkpoints_desde:
+        if not args.solo_checkpoints:
+            parser.error("--checkpoints-desde requiere --solo-checkpoints")
+        try:
+            checkpoint_desde = datetime.fromisoformat(args.checkpoints_desde)
+        except ValueError:
+            parser.error("--checkpoints-desde debe ser una fecha ISO, por ejemplo 2026-09-23T09:23:29")
 
     raiz = Path(args.dir)
     if not raiz.exists():
@@ -992,6 +1008,19 @@ def main():
                 resultados_previos = json.loads(salida.read_text(encoding="utf-8"))
             except json.JSONDecodeError:
                 resultados_previos = []
+        if args.solo_checkpoints:
+            if checkpoint_desde and (
+                not salida.exists()
+                or datetime.fromtimestamp(salida.stat().st_mtime) < checkpoint_desde
+            ):
+                continue
+            for oferta in resultados_previos:
+                registrar_resultado(
+                    licitacion.name, metadata, oferta, todos, consumos, proveedores_procesados
+                )
+            if resultados_previos:
+                print(f"{licitacion.name}: checkpoint ({len(resultados_previos)} proveedores)")
+            continue
         if salida.exists() and not args.rehacer and not args.solo_tecnicos_fallback:
             resultados = resultados_previos
             for oferta in resultados:

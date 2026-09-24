@@ -28,7 +28,7 @@ USO:
     # Producción económica (todas, reanudable, headless):
   python scraper_ofertas.py --csv para_scrapear.csv
 
-    # Fallback técnico para proveedores sin precio en extraccion_openai.json:
+    # Fallback técnico para proveedores que aún no tienen precio en los resultados IA:
     python scraper_ofertas.py --csv para_scrapear.csv --solo-tecnicos-fallback
 
     # Una licitación suelta por código o qs (modo test):
@@ -185,9 +185,10 @@ def descargar_popup(context, url_popup, carpeta, prefijo):
 # Procesar UNA licitación (por código o qs)
 # ---------------------------------------------------------------------------
 def procesar_licitacion(context, identificador, es_qs=False,
-                        tipos_anexos=None, ruts_objetivo=None):
+                        tipos_anexos=None, ruts_objetivo=None, ruts_excluir=None):
     tipos_anexos = set(tipos_anexos or {"economico"})
     ruts_objetivo = {str(rut).strip() for rut in (ruts_objetivo or [])}
+    ruts_excluir = {str(rut).strip() for rut in (ruts_excluir or [])}
     page = context.new_page()
     url = FICHA_POR_QS.format(identificador) if es_qs else FICHA_POR_CODIGO.format(identificador)
     print(f"\n▶ {identificador}")
@@ -272,6 +273,8 @@ def procesar_licitacion(context, identificador, es_qs=False,
                 encoding="utf-8")
             if ruts_objetivo and rut not in ruts_objetivo:
                 continue
+            if rut in ruts_excluir:
+                continue
             for tipo, url_popup in of["anexos"].items():
                 if tipo not in tipos_anexos:
                     continue
@@ -293,7 +296,7 @@ def procesar_licitacion(context, identificador, es_qs=False,
 
 def procesar_con_reintentos(browser, identificador, es_qs, tipos_anexos,
                             ruts_objetivo=None, max_intentos=2,
-                            pausa_reintento=15):
+                            pausa_reintento=15, ruts_excluir=None):
     reintentables = {"sin_cuadro", "error_ficha", "error_cuadro"}
     resultado = {"ofertas": 0, "archivos": 0, "estado": "error_desconocido"}
     for intento in range(1, max(1, max_intentos) + 1):
@@ -301,7 +304,8 @@ def procesar_con_reintentos(browser, identificador, es_qs, tipos_anexos,
         try:
             resultado = procesar_licitacion(
                 context, identificador, es_qs=es_qs,
-                tipos_anexos=tipos_anexos, ruts_objetivo=ruts_objetivo
+                tipos_anexos=tipos_anexos, ruts_objetivo=ruts_objetivo,
+                ruts_excluir=ruts_excluir
             )
         finally:
             context.close()
@@ -362,6 +366,47 @@ def ruts_sin_precio(ruta_resultados):
     return ruts
 
 
+def ruts_con_precio(rutas_resultados):
+    """RUTs que ya tienen algun precio en cualquiera de los JSON de resultados.
+    Se combinan todos los archivos existentes (local y OpenAI historico)."""
+    ruts = set()
+    for ruta in rutas_resultados:
+        ruta = Path(ruta)
+        if not ruta.is_file():
+            continue
+        try:
+            resultados = json.loads(ruta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for resultado in resultados:
+            tiene_precio = any(
+                producto.get("precio_unitario") not in (None, "")
+                or producto.get("precio_total") not in (None, "")
+                for producto in resultado.get("productos", [])
+                if isinstance(producto, dict)
+            )
+            if tiene_precio and resultado.get("rut"):
+                ruts.add(str(resultado["rut"]).strip())
+    return ruts
+
+
+def ruts_en_disco(carpeta_licitacion):
+    """RUTs de los proveedores ya descargados en la carpeta de la licitacion."""
+    ruts = set()
+    if not Path(carpeta_licitacion).is_dir():
+        return ruts
+    for carpeta in Path(carpeta_licitacion).iterdir():
+        oferta = carpeta / "oferta.json"
+        if carpeta.is_dir() and oferta.is_file():
+            try:
+                rut = json.loads(oferta.read_text(encoding="utf-8")).get("rut")
+            except (OSError, json.JSONDecodeError):
+                rut = None
+            if rut:
+                ruts.add(str(rut).strip())
+    return ruts
+
+
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
@@ -380,7 +425,7 @@ def main():
     ap.add_argument("--solo-tecnicos", action="store_true",
                     help="Descarga solo tecnicos para completar ofertas ya scrapeadas.")
     ap.add_argument("--solo-tecnicos-fallback", action="store_true",
-                    help="Descarga tecnicos solo para proveedores sin precio en extraccion_openai.json.")
+                    help="Descarga tecnicos para proveedores que aun no tienen precio en los resultados IA.")
     ap.add_argument("--reintentar-errores", action="store_true",
                     help="Reintenta también las marcadas 'error' (default: solo 'pendiente').")
     ap.add_argument("--max-intentos", type=int, default=2,
@@ -467,17 +512,24 @@ def main():
                 continue
             print(f"\n[{i}/{total}] {codigo}")
             ruts_objetivo = None
+            ruts_excluir = None
             if args.solo_tecnicos_fallback:
-                ruts_objetivo = ruts_sin_precio(
-                    SALIDA / codigo / "extraccion_openai.json"
-                )
-                if not ruts_objetivo:
-                    print("   ↷ No hay proveedores sin precio para fallback técnico")
+                # Se descargan tecnicos para todos los proveedores SALVO los que ya
+                # tienen precio en algun resultado (local o OpenAI historico). Asi
+                # tambien entran los que aun no se han procesado con IA.
+                carpeta_lic = SALIDA / codigo
+                ruts_excluir = ruts_con_precio([
+                    carpeta_lic / "extraccion_ia.json",
+                    carpeta_lic / "extraccion_openai.json",
+                ])
+                descargados = ruts_en_disco(carpeta_lic)
+                if descargados and descargados <= ruts_excluir:
+                    print("   ↷ Todos los proveedores ya tienen precio; no hace falta fallback técnico")
                     continue
             try:
                 r = procesar_con_reintentos(
                     browser, codigo, es_qs=False, tipos_anexos=tipos_anexos,
-                    ruts_objetivo=ruts_objetivo,
+                    ruts_objetivo=ruts_objetivo, ruts_excluir=ruts_excluir,
                     max_intentos=args.max_intentos, pausa_reintento=args.pausa_reintento
                 )
                 fila["scraping_estado"] = r.get("estado", "ok")
