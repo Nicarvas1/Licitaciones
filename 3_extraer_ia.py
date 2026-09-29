@@ -787,8 +787,12 @@ def normalizar_producto(producto, proveedor, rut, archivo, tipo_doc):
         "moneda": producto.get("moneda"),
         "confianza": producto.get("confianza"),
         "pagina": producto.get("pagina"),
+        "pagina_producto": normalizar_numero(producto.get("pagina_producto")),
+        "pagina_precio": normalizar_numero(producto.get("pagina_precio")),
         "fila_fuente": producto.get("fila_fuente"),
         "evidencia": producto.get("evidencia"),
+        "fuente_producto": producto.get("fuente_producto"),
+        "fuente_precio": producto.get("fuente_precio"),
         "archivo_fuente": archivo,
         "tipo_documental": tipo_doc
     }
@@ -950,7 +954,8 @@ def deduplicar_productos(productos):
         for campo in (
             "marca", "modelo", "item", "cantidad", "cantidad_fuente",
             "precio_unitario", "precio_total", "precio_total_tipo", "moneda", "evidencia",
-            "pagina", "fila_fuente", "fuente_producto", "fuente_precio",
+            "pagina", "pagina_producto", "pagina_precio", "fila_fuente",
+            "fuente_producto", "fuente_precio",
         ):
             if not existente.get(campo) and producto.get(campo):
                 existente[campo] = producto[campo]
@@ -1702,11 +1707,20 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
             for producto in datos.get("productos", []):
                 if not isinstance(producto, dict):
                     continue
-                relativo = archivo_declarado(producto.get("archivo"), archivos_llamada) or archivos_llamada[0]
+                archivo_producto = archivo_declarado(producto.get("archivo_producto"), archivos_llamada)
+                archivo_precio = archivo_declarado(producto.get("archivo_precio"), archivos_llamada)
+                relativo = (
+                    archivo_declarado(producto.get("archivo"), archivos_llamada)
+                    or archivo_precio
+                    or archivo_producto
+                    or archivos_llamada[0]
+                )
                 if producto.get("precio_total") not in (None, "") and not producto.get("precio_total_tipo"):
                     producto["precio_total_tipo"] = "linea"
                 limpio = normalizar_producto(producto, proveedor, rut, relativo, tipo_documental(relativo))
                 if limpio:
+                    limpio["fuente_producto"] = archivo_producto
+                    limpio["fuente_precio"] = archivo_precio
                     parciales.append(limpio)
                     por_archivo[relativo]["productos_encontrados"] += 1
         if args.pausa_archivo > 0:
@@ -2089,77 +2103,65 @@ def registrar_resultado(codigo, metadata, resultado, productos, consumos, resume
 
 def generar_excel(productos, consumos, resumenes, ruta):
     columnas = [
-        "codigo", "nombre_licitacion", "fecha_publicacion", "estado_licitacion",
-        "organismo", "proveedor", "rut", "item", "producto", "categoria", "marca", "modelo",
-        "cantidad", "cantidad_fuente", "precio_unitario", "precio_total", "moneda",
-        "precio_total_tipo",
-        "fuente_producto", "fuente_precio", "archivo_fuente", "pagina", "fila_fuente",
-        "evidencia", "fuentes_respaldo", "confianza", "estado_validacion", "alertas"
-    ]
-    consumo_columnas = [
-        "codigo", "proveedor", "rut", "tipo_llamada", "archivo", "estado",
-        "modelo", "prompt_tokens", "completion_tokens", "total_tokens", "llamadas"
-    ]
-    resumen_columnas = [
-        "codigo", "nombre_licitacion", "fecha_publicacion", "organismo", "proveedor", "rut",
-        "estado_oferta", "productos", "productos_validos", "productos_revisar",
-        "llamadas", "errores_modelo", "ocr", "no_soportados"
-    ]
-    alerta_columnas = [
-        "codigo", "proveedor", "rut", "tipo", "detalle", "producto",
-        "cantidad", "precio_unitario", "precio_total", "archivo_fuente"
+        "Licitación", "Fecha licitación", "Proveedor", "Producto", "Marca producto",
+        "Cantidad", "Precio unitario", "Precio total", "Fuente de información",
     ]
 
     wb = Workbook()
-    wb.remove(wb.active)
+    ws = wb.active
+    ws.title = "Productos"
+    for columna, titulo in enumerate(columnas, 1):
+        celda = ws.cell(1, columna, titulo)
+        celda.font = Font(bold=True, color="FFFFFF")
+        celda.fill = PatternFill("solid", fgColor="1F4E78")
 
-    def crear_hoja(nombre, campos, filas):
-        ws = wb.create_sheet(nombre)
-        for columna, campo in enumerate(campos, 1):
-            celda = ws.cell(1, columna, campo)
-            celda.font = Font(bold=True, color="FFFFFF")
-            celda.fill = PatternFill("solid", fgColor="1F4E78")
-        for fila, datos in enumerate(filas, 2):
-            for columna, campo in enumerate(campos, 1):
-                valor = datos.get(campo)
-                if isinstance(valor, list):
-                    valor = "; ".join(str(elemento) for elemento in valor)
-                ws.cell(fila, columna, valor)
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = ws.dimensions
+    def agregar_fuente(fuentes, tipo, archivo, pagina=None):
+        if not archivo or archivo == "consolidacion":
+            return
+        texto = f"{tipo}: {archivo}"
+        if pagina not in (None, ""):
+            texto += f" (p. {pagina})"
+        if texto not in fuentes:
+            fuentes.append(texto)
 
-    alertas = []
-    for producto in productos:
-        for alerta in producto.get("alertas") or []:
-            alertas.append({
-                "codigo": producto.get("codigo"),
-                "proveedor": producto.get("proveedor"),
-                "rut": producto.get("rut"),
-                "tipo": "producto",
-                "detalle": alerta,
-                "producto": producto.get("producto"),
-                "cantidad": producto.get("cantidad"),
-                "precio_unitario": producto.get("precio_unitario"),
-                "precio_total": producto.get("precio_total"),
-                "archivo_fuente": producto.get("archivo_fuente"),
-            })
-    for resumen in resumenes:
-        if resumen.get("productos", 0) == 0 and resumen.get("estado_oferta") != "Rechazada":
-            alertas.append({**resumen, "tipo": "proveedor", "detalle": "sin_productos_en_alcance"})
-        if resumen.get("ocr", 0):
-            alertas.append({**resumen, "tipo": "proveedor", "detalle": "archivos_pendientes_ocr"})
-        if resumen.get("errores_modelo", 0):
-            alertas.append({**resumen, "tipo": "proveedor", "detalle": "errores_modelo"})
+    for indice, producto in enumerate(productos, 2):
+        fuentes = []
+        archivo_base = producto.get("archivo_fuente")
+        archivo_producto = producto.get("fuente_producto")
+        archivo_precio = producto.get("fuente_precio")
+        if archivo_producto or archivo_precio:
+            agregar_fuente(
+                fuentes, "Producto", archivo_producto or archivo_base,
+                producto.get("pagina_producto") or producto.get("pagina"),
+            )
+            if producto.get("precio_unitario") not in (None, "") or producto.get("precio_total") not in (None, ""):
+                agregar_fuente(
+                    fuentes, "Precio", archivo_precio or archivo_base,
+                    producto.get("pagina_precio") or producto.get("pagina"),
+                )
+        else:
+            agregar_fuente(fuentes, "Fuente", archivo_base, producto.get("pagina"))
+        fuentes_primarias = {archivo_base, archivo_producto, archivo_precio}
+        for archivo in producto.get("fuentes_respaldo") or []:
+            if archivo not in fuentes_primarias:
+                agregar_fuente(fuentes, "Respaldo", archivo)
 
-    crear_hoja("Productos", columnas, productos)
-    crear_hoja(
-        "Productos_validos",
-        columnas,
-        [producto for producto in productos if producto.get("estado_validacion") == "ok"],
-    )
-    crear_hoja("Alertas", alerta_columnas, alertas)
-    crear_hoja("Consumo", consumo_columnas, consumos)
-    crear_hoja("Resumen", resumen_columnas, resumenes)
+        valores = (
+            producto.get("codigo"),
+            producto.get("fecha_publicacion"),
+            producto.get("proveedor"),
+            producto.get("producto"),
+            producto.get("marca"),
+            producto.get("cantidad"),
+            producto.get("precio_unitario"),
+            producto.get("precio_total"),
+            "; ".join(fuentes),
+        )
+        for columna, valor in enumerate(valores, 1):
+            ws.cell(indice, columna, valor)
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
     wb.save(ruta)
 
 

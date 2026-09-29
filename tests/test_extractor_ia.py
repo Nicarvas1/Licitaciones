@@ -202,6 +202,59 @@ class ExtractorIATest(unittest.TestCase):
             self.assertEqual(json.loads(ruta.read_text(encoding="utf-8")), [{"rut": "1"}])
             self.assertFalse(ruta.with_suffix(".json.tmp").exists())
 
+    def test_excel_simplificado_con_fuentes_por_campo(self):
+        from openpyxl import load_workbook
+
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta = Path(directorio) / "productos.xlsx"
+            extractor.generar_excel(
+                [{
+                    "codigo": "1234-5-LE25",
+                    "fecha_publicacion": "2025-11-01",
+                    "proveedor": "Proveedor",
+                    "producto": "Notebook HP",
+                    "marca": "HP",
+                    "cantidad": 2,
+                    "precio_unitario": 500000,
+                    "precio_total": 1000000,
+                    "fuente_producto": "ficha.pdf",
+                    "pagina_producto": 2,
+                    "fuente_precio": "oferta.pdf",
+                    "pagina_precio": 3,
+                    "fuentes_respaldo": ["ficha.pdf", "oferta.pdf"],
+                }],
+                [], [], ruta,
+            )
+            libro = load_workbook(ruta, read_only=True, data_only=True)
+            self.assertEqual(libro.sheetnames, ["Productos"])
+            hoja = libro["Productos"]
+            self.assertEqual(
+                list(next(hoja.iter_rows(min_row=1, max_row=1, values_only=True))),
+                [
+                    "Licitación", "Fecha licitación", "Proveedor", "Producto", "Marca producto",
+                    "Cantidad", "Precio unitario", "Precio total", "Fuente de información",
+                ],
+            )
+            fila = list(next(hoja.iter_rows(min_row=2, max_row=2, values_only=True)))
+            self.assertEqual(tuple(fila[0:8]), (
+                "1234-5-LE25", "2025-11-01", "Proveedor", "Notebook HP", "HP", 2, 500000, 1000000,
+            ))
+            self.assertIn("Producto: ficha.pdf (p. 2)", fila[8])
+            self.assertIn("Precio: oferta.pdf (p. 3)", fila[8])
+            self.assertNotIn("Respaldo:", fila[8])
+            libro.close()
+
+    def test_prompt_proveedor_formatea_y_pide_reconstruir_tablas(self):
+        prompt = extractor.PROMPT_PROVEEDOR.format(
+            proveedor="Proveedor",
+            total_oferta="1000",
+            nota_imagenes="",
+            documentos="tabla de prueba",
+        )
+        self.assertIn("Reconstruye cada fila", prompt)
+        self.assertIn("archivo_precio", prompt)
+        self.assertIn("tabla de prueba", prompt)
+
     def test_resultado_fallido_se_reprocesa(self):
         fallido = {
             "resultados_archivos": [{"estado_ia": "http_500"}],

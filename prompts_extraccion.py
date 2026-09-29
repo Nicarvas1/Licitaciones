@@ -105,6 +105,8 @@ Devuelve SOLO JSON valido:
       "categoria": "equipo|monitor|impresora|null",
       "fuente_producto": "archivo o null",
       "fuente_precio": "archivo o null",
+      "pagina_producto": null,
+      "pagina_precio": null,
       "evidencia": "texto literal breve que respalda la union",
       "confianza": "alta|media|baja"
     }}
@@ -122,6 +124,7 @@ REGLAS:
 - Cuando dos documentos repitan el mismo item, devuelve una sola fila. Prioriza
   la fuente con columnas separadas por || y valores que cumplan cantidad por
   precio unitario igual a total de linea.
+- Conserva el nombre exacto de los archivos y las paginas que respaldan producto/marca y precio.
 - La suma de productos no puede superar el total de la oferta. Si las fuentes
   no permiten resolver una contradiccion, devuelve una sola fila con los campos
   dudosos en null y confianza baja, en vez de conservar duplicados incompatibles.
@@ -159,31 +162,24 @@ REGLAS_VISION = r'''MODO VISION: junto a este mensaje se adjuntan imagenes de pa
 - Las mismas reglas de alcance, exclusiones y no inventar aplican igual.'''
 
 
-# Modo --por-proveedor: UNA llamada con las paginas relevantes de todos los anexos
-# de un proveedor. Respuesta corta (9 campos) para generar menos tokens.
+# Modo --por-proveedor: una llamada con las paginas relevantes de los anexos de un proveedor.
 PROMPT_PROVEEDOR = r"""Extrae los equipos ofertados por UN proveedor en una licitacion publica chilena.
-Abajo vienen las paginas relevantes de sus anexos (economicos y tecnicos).{nota_imagenes}
+Analiza todos sus anexos economicos y tecnicos. Reconstruye cada fila aunque la tabla este
+desordenada o aplanada, usando encabezados, item y contexto visual. {nota_imagenes}
 
 PROVEEDOR: {proveedor}
-TOTAL DE SU OFERTA SEGUN EL PORTAL: {total_oferta}
+TOTAL DE OFERTA (solo referencia; no asignarlo a productos): {total_oferta}
 
 Devuelve SOLO este JSON, sin texto adicional:
-{{"productos":[{{"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","archivo":"","pagina":null}}]}}
+{{"productos":[{{"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","archivo_producto":null,"pagina_producto":null,"archivo_precio":null,"pagina_precio":null}}]}}
 
-REGLAS:
-- Una fila por equipo ofertado. Si el mismo equipo aparece en un anexo economico y en uno tecnico,
-  devuelvelo UNA sola vez: cantidad y precios del economico; marca y modelo de donde aparezcan.
-- Alcance: SOLO computadores, notebooks, desktop/PC, all-in-one, workstations, monitores e
-  impresoras/multifuncionales. Ignora accesorios, licencias, garantias, servicios, despacho,
-  instalacion, TV, tablets, servidores y redes, aunque tengan precio propio.
-- No devuelvas especificaciones (procesador, RAM, disco, sistema operativo) como productos.
-- precio_unitario: precio de UNA unidad. precio_total: total de ESA linea (cantidad x unitario).
-  Nunca uses el total general de la oferta, el IVA ni subtotales como precio de un producto.
-- Si hay precios con y sin IVA, usa los netos (sin IVA).
-- Montos como numeros sin puntos ni simbolos: 650.000 -> 650000.
-- archivo: nombre exacto del archivo de donde sale el precio (o el producto, si no hay precio).
-  pagina: numero de pagina.
-- No inventes: usa null si un dato no aparece. Si no hay equipos, devuelve {{"productos":[]}}.
+Extrae solo computadores, notebooks, desktop/PC, all-in-one, workstations, monitores e impresoras;
+excluye accesorios, servicios, TV, tablets, servidores y redes. Combina anexos solo si el item
+coincide claramente: usa el tecnico para marca/modelo y el economico para cantidad/precios. Si un
+componente sin precio propio pertenece a un kit, incluyelo dentro de la descripcion del kit.
+Devuelve precio unitario y total de la misma linea; calcula el unitario solo con cantidad y total
+de esa linea. Usa precios netos, nunca IVA ni total general. Usa null si falta un dato; no inventes.
+Indica archivo y pagina del producto/marca y del precio. Devuelve [] si no hay productos del alcance.
 
 DOCUMENTOS:
 {documentos}
