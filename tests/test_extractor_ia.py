@@ -223,6 +223,8 @@ class ExtractorIATest(unittest.TestCase):
                     "pagina_producto": 2,
                     "fuente_precio": "oferta.pdf",
                     "pagina_precio": 3,
+                    "fuente_marca": "ficha.pdf",
+                    "pagina_marca": 2,
                     "fuentes_respaldo": ["ficha.pdf", "oferta.pdf"],
                 }],
                 [], [], ruta,
@@ -243,6 +245,7 @@ class ExtractorIATest(unittest.TestCase):
             ))
             self.assertIn("Producto: ficha.pdf (p. 2)", fila[8])
             self.assertIn("Precio: oferta.pdf (p. 3)", fila[8])
+            self.assertIn("Marca: ficha.pdf (p. 2)", fila[8])
             self.assertNotIn("Respaldo:", fila[8])
             libro.close()
 
@@ -256,6 +259,81 @@ class ExtractorIATest(unittest.TestCase):
         self.assertIn("Reconstruye cada fila", prompt)
         self.assertIn("archivo_precio", prompt)
         self.assertIn("tabla de prueba", prompt)
+        self.assertIn("Conserva marcas", prompt)
+        self.assertIn('"item":null', prompt)
+
+    def test_filtro_conserva_marcas_desconocidas_y_fichas_sin_precio(self):
+        for texto in (
+            "Monitor OzXen Pro 24 pulgadas", "Notebook MarcaNueva modelo ABC123",
+            "Item 2\nMarca: AOC\nModelo: 24B2XH", "Modelo: ZX123",
+            "Panel IPS\nResolucion 1920x1080\nHDMI\nDisplayPort",
+        ):
+            with self.subTest(texto=texto):
+                self.assertTrue(extractor.pagina_relevante(texto))
+        self.assertFalse(extractor.pagina_relevante("Declaracion jurada de inhabilidades del proveedor"))
+
+    def test_pdf_tecnico_desconocido_se_envia_junto_al_economico(self):
+        args = SimpleNamespace(vision=False, vision_solo_escaneadas=False, ocr=False)
+        carpeta = Path("proveedor")
+        def lectura(path, args, detalle):
+            texto = ("Monitor MarcaNueva ZX123\nMarca: MarcaNueva" if path.name == "tecnico.pdf"
+                     else "Monitor 2 $100.000 $200.000")
+            detalle.update(texto_paginas={0: texto}, paginas_vision={})
+            return texto, "texto"
+        with mock.patch.object(extractor, "extraer_archivo", side_effect=lectura):
+            bloques, registros, _, _, _ = extractor.preparar_bloques_proveedor(
+                carpeta, [carpeta / "economico.pdf", carpeta / "tecnico.pdf"], args)
+        self.assertEqual({p["archivo"] for p in bloques}, {"economico.pdf", "tecnico.pdf"})
+        self.assertTrue(all(r["paginas_enviadas"] == [1] for r in registros))
+
+    def test_recupera_marca_por_modelo_exacto_y_conserva_fuente(self):
+        economico = {"producto": "Monitor", "categoria": "monitor", "modelo": "ZX123", "marca": None}
+        tecnico = {"producto": "Monitor MarcaNueva ZX123", "categoria": "monitor", "modelo": "ZX123",
+                   "marca": "MarcaNueva", "archivo_fuente": "ficha.pdf", "pagina_producto": 2}
+        producto = extractor.completar_marcas_desde_parciales([economico], [tecnico])[0]
+        self.assertEqual(producto["marca"], "MarcaNueva")
+        self.assertEqual(producto["fuente_marca"], "ficha.pdf")
+        self.assertEqual(producto["pagina_marca"], 2)
+        self.assertIsNone(economico["marca"])
+
+    def test_no_recupera_marca_con_identidad_ambigua_o_contradictoria(self):
+        base = {"producto": "Monitor", "categoria": "monitor", "modelo": "ZX123", "marca": None,
+                "item": "2", "rut": "1"}
+        tecnico = {**base, "marca": "MarcaNueva"}
+        casos = [
+            [{**tecnico, "modelo": "ZX124"}],
+            [{**tecnico, "categoria": "equipo"}],
+            [{**tecnico, "item": "3"}],
+            [{**tecnico, "rut": "2"}],
+            [tecnico, {**tecnico, "marca": "OtraMarca"}],
+        ]
+        for parciales in casos:
+            with self.subTest(parciales=parciales):
+                self.assertIsNone(extractor.completar_marcas_desde_parciales([base], parciales)[0]["marca"])
+        generico = {**base, "modelo": None}
+        self.assertIsNone(extractor.completar_marcas_desde_parciales([generico], [tecnico])[0]["marca"])
+        declarado = {**base, "marca": "MarcaDeclarada"}
+        self.assertEqual(extractor.completar_marcas_desde_parciales([declarado], [tecnico])[0]["marca"],
+                         "MarcaDeclarada")
+
+    def test_no_fusiona_productos_de_marcas_distintas(self):
+        base = {"producto": "Monitor ZX123", "categoria": "monitor", "modelo": "ZX123"}
+        self.assertEqual(len(extractor.deduplicar_productos([
+            {**base, "marca": "MarcaUno"}, {**base, "marca": "MarcaDos"},
+        ])), 2)
+
+    def test_consolidacion_recupera_marca_omitida_sin_otra_llamada(self):
+        parcial = {"producto": "Monitor MarcaNueva ZX123", "categoria": "monitor", "modelo": "ZX123",
+                   "marca": "MarcaNueva", "archivo_fuente": "ficha.pdf"}
+        args = SimpleNamespace(sin_consolidar=False, max_chars_consolidacion=24000, modelo="prueba",
+                               timeout=5, num_ctx=8192, backend="lmstudio", max_tokens=1000,
+                               reintentos_modelo=0, espera_reintento=0, pausa_archivo=0)
+        with mock.patch.object(extractor, "consultar_modelo", return_value=(
+                {"productos": [{**parcial, "marca": None}]}, "ok", "{}", {})) as llamada:
+            productos, *_ = extractor.consolidar_parciales([parcial], "Proveedor", "1", "", args)
+        llamada.assert_called_once()
+        self.assertEqual(productos[0]["marca"], "MarcaNueva")
+        self.assertEqual(productos[0]["fuente_marca"], "ficha.pdf")
 
     def test_agrupacion_conserva_ultima_fila_y_encabezados_de_excel_largo(self):
         encabezado = "FILA 1: Producto || Cantidad || Unitario || Total"

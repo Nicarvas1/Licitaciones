@@ -37,6 +37,8 @@ Devuelve SOLO JSON valido:
 REGLAS:
 - Una fila por item ofertado. Conserva marca/modelo aunque falte precio, y
   cantidad/precios aunque la descripcion economica sea generica.
+- Extrae la marca del producto, no la del procesador, disco o accesorio. Puede ser
+  una marca desconocida; no confundas marca con familia/modelo (ThinkPad, ProDesk).
 - precio_unitario es por unidad; precio_total es de esa linea. Con cantidad y
   total de la misma fila calcula total/cantidad; sin cantidad devuelve ambos
   precios disponibles para que el programa compruebe la division.
@@ -111,6 +113,8 @@ REGLAS:
   la fuente con columnas separadas por || y valores que cumplan cantidad por
   precio unitario igual a total de linea.
 - Conserva el nombre exacto de los archivos y las paginas que respaldan producto/marca y precio.
+- Recupera marca/modelo de las fichas tecnicas del mismo producto aunque no tengan precio.
+  No uses la marca de otro item ni de sus componentes; conserva marcas desconocidas.
 - La suma de productos no puede superar el total de la oferta. Si las fuentes
   no permiten resolver una contradiccion, devuelve una sola fila con los campos
   dudosos en null y confianza baja, en vez de conservar duplicados incompatibles.
@@ -159,12 +163,16 @@ PROVEEDOR: {proveedor}
 TOTAL DE OFERTA (solo referencia; no asignarlo a productos): {total_oferta}
 
 Devuelve SOLO este JSON, sin texto adicional:
-{{"productos":[{{"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","archivo_producto":null,"pagina_producto":null,"archivo_precio":null,"pagina_precio":null}}]}}
+{{"productos":[{{"item":null,"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","archivo_producto":null,"pagina_producto":null,"archivo_precio":null,"pagina_precio":null}}]}}
 
 Extrae solo computadores, notebooks, desktop/PC, all-in-one, workstations, monitores e impresoras;
 excluye accesorios, servicios, TV, tablets, servidores y redes. Combina anexos solo si el item
 coincide claramente: usa el tecnico para marca/modelo y el economico para cantidad/precios. Si un
 componente sin precio propio pertenece a un kit, incluyelo dentro de la descripcion del kit.
+Busca marca/modelo en todas las fichas incluidas, aunque no tengan precios. Conserva marcas
+desconocidas y productos tecnicos sin precio para permitir el cruce entre llamadas. Marca es
+el fabricante del producto, no su familia/modelo ni la marca de CPU, disco o accesorios.
+Cruza por item y modelo/especificaciones compatibles; nunca por precio o proveedor solamente.
 Devuelve precio unitario y total de la misma linea; calcula el unitario solo con cantidad y total
 de esa linea. Usa precios netos, nunca IVA ni total general. Usa null si falta un dato; no inventes.
 Indica archivo y pagina del producto/marca y del precio. Devuelve [] si no hay productos del alcance.

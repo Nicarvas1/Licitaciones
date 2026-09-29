@@ -2,7 +2,7 @@
 Pruebas del generador de revision (4_revisar_extraccion.py).
 
 Ejecutar desde la raiz del proyecto:
-    python -m unittest tests.test_revision -v
+    python -m unittest test_revision -v
 """
 
 import importlib.util
@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-RAIZ = Path(__file__).resolve().parents[1]
+RAIZ = Path(__file__).resolve().parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 
@@ -59,7 +59,8 @@ class TestEvidenciaPdf(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_ubicacion_exacta_verificada(self):
-        producto = {"precio_unitario": 690000, "ubicacion": {"pagina": 1, "bbox_fila": [40, 92, 660, 114]}}
+        producto = {"producto": "Notebook Dell Latitude 3540", "precio_unitario": 690000,
+                    "ubicacion": {"pagina": 1, "bbox_fila": [40, 92, 660, 114]}}
         evidencia = rev.evidencia_pdf(self.docs, self.pdf, producto, self.dir / "a", 72)
         self.assertEqual(evidencia["ubicado"], "exacto")
         self.assertTrue(Path(evidencia["imagen"]).is_file())
@@ -128,7 +129,7 @@ class TestEvidenciaExcel(unittest.TestCase):
             hoja.append(["Descripcion", "Cantidad", "Precio unitario", "Total"])
             hoja.append(["Notebook HP ProBook 440 G11", 10, 650000, 6500000])
             libro.save(ruta)
-            producto = {"precio_unitario": 650000, "ubicacion": {
+            producto = {"producto": "Notebook HP ProBook 440 G11", "precio_unitario": 650000, "ubicacion": {
                 "hoja": "Oferta", "fila": 1, "fila_encabezado": 0,
                 "columnas": {"descripcion": 0, "cantidad": 1, "unitario": 2, "total": 3}}}
             docs = rev.Documentos()

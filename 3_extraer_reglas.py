@@ -733,36 +733,146 @@ def completar_identidad(producto):
     return producto
 
 
+def categoria_reglas(producto):
+    """Clasifica el bien, sin convertir accesorios/servicios en equipos por su nombre."""
+    descripcion = norm(producto.get("producto"))
+    if re.search(r"\b(?:scanner|escaner|proyector|tablet|servidor)\b", descripcion):
+        return None
+    if re.match(r"^(?:serv\d+\s+|servicio\b|masterizacion\b)", descripcion):
+        return None
+    if re.match(r"^(?:impresora|multifuncional)\b", descripcion):
+        return "impresora"
+    return ia.clasificar_producto(producto)
+
+
 def categoria_propia(producto):
     """Categoria segun el texto de la propia fila (sin marca/modelo prestados)."""
-    return ia.clasificar_producto({"producto": producto.get("producto"), "modelo": producto.get("modelo"),
-                                   "categoria": producto.get("categoria")})
+    return categoria_reglas({"producto": producto.get("producto"), "modelo": producto.get("modelo"),
+                             "categoria": producto.get("categoria")})
+
+
+def es_documento_historico(nombre):
+    """Respaldos comerciales no representan la oferta actual, aunque incluyan precios."""
+    nombre = norm(str(nombre).replace("\\", "/"))
+    return bool(re.search(
+        r"respaldo[_ /-]*experiencia|(?:^|[/ _-])factura(?:[ ._-]|$)|orden[_ /-]*de[_ /-]*compra|"
+        r"(?:^|/)oc[_ -]|certificado[_ /-]*(?:de[_ /-]*)?(?:distribuidor|experiencia)", nombre))
+
+
+def fusionar_productos_reglas(productos):
+    """Une duplicados solo por identidad compatible, nunca por coincidencia de precios."""
+    unicos = []
+    for original in productos:
+        producto = dict(original)
+        marca = detectar_marca(producto.get("marca")) or producto.get("marca") or detectar_marca(producto.get("producto"))
+        candidatos = []
+        for candidato in unicos:
+            otra_marca = detectar_marca(candidato.get("marca")) or candidato.get("marca") or detectar_marca(candidato.get("producto"))
+            if marca and otra_marca and norm(marca) != norm(otra_marca):
+                continue
+            if (producto.get("archivo_fuente") == candidato.get("archivo_fuente")
+                    and producto.get("archivo_fuente")
+                    and producto.get("ubicacion") and candidato.get("ubicacion")
+                    and producto["ubicacion"] != candidato["ubicacion"]):
+                continue  # filas distintas del mismo anexo pueden tener descripcion/precios iguales
+            modelo, otro_modelo = norm(producto.get("modelo")), norm(candidato.get("modelo"))
+            if modelo and otro_modelo and modelo != otro_modelo:
+                continue
+            conflicto_numerico = False
+            for campo in ("cantidad", "precio_unitario", "precio_total"):
+                a, b = producto.get(campo), candidato.get(campo)
+                if a in (None, "") or b in (None, ""):
+                    continue
+                a, b = ia.normalizar_numero(a), ia.normalizar_numero(b)
+                if a is None or b is None or abs(a - b) > 0.01:
+                    conflicto_numerico = True
+                    break
+            if conflicto_numerico:
+                continue
+            mismo_item = (bool(producto.get("item")) and norm(producto["item"]) == norm(candidato.get("item")))
+            identidad = ia.productos_equivalentes(producto, candidato) or (
+                mismo_item and categoria_propia(producto) == categoria_propia(candidato)
+                and all(ia.numeros_iguales(producto.get(c), candidato.get(c))
+                        for c in ("cantidad", "precio_unitario", "precio_total")))
+            if identidad:
+                candidatos.append(candidato)
+        if len(candidatos) != 1:
+            unicos.append(producto)
+            continue
+        existente = candidatos[0]
+        fuentes = set(existente.get("fuentes_respaldo") or []) | set(producto.get("fuentes_respaldo") or [])
+        for datos in (existente, producto):
+            for campo in ("archivo_fuente", "fuente_producto", "fuente_precio"):
+                if datos.get(campo):
+                    fuentes.add(datos[campo])
+        if not existente.get("modelo") and producto.get("modelo"):
+            existente["producto"] = producto["producto"]
+            existente["fuente_producto"] = producto.get("fuente_producto") or producto.get("archivo_fuente")
+        for campo, valor in producto.items():
+            if existente.get(campo) in (None, ""):
+                existente[campo] = valor
+        existente["fuentes_respaldo"] = sorted(fuentes)
+    return unicos
 
 
 def completar_desde_otros_documentos(productos, textos_por_archivo):
-    """Si a un EQUIPO le falta marca/modelo y en los documentos del proveedor aparece
-    exactamente un modelo del catalogo de su misma categoria, se asigna.
-    Nunca se asigna a filas que por su propio texto no son equipos del alcance
-    (discos, UPS, despacho, licencias...): eso las hacia pasar el filtro."""
+    """Completa identidad solo con marca compatible y correspondencia unica.
+
+    El respaldo por proveedor es valido solo para un producto de esa categoria.
+    Con varios productos se requiere un item/tipo explicito en la evidencia.
+    """
     modelos = {}
     for archivo, texto in textos_por_archivo.items():
+        if es_documento_historico(archivo):
+            continue
         for linea in texto.splitlines():
+            if sum(len(patron.findall(linea)) for patron, _, _ in FAMILIAS) > 1:
+                continue  # varios modelos en la misma linea: no hay identidad unica
             marca, modelo, categoria = detectar_modelo(linea)
             if modelo:
                 clave = (marca, ia.texto_normalizado(modelo), categoria)
-                modelos.setdefault(clave, (marca, modelo, categoria, archivo))
+                modelos.setdefault(clave, []).append((marca, modelo, categoria, archivo, linea))
+    conteo = Counter(categoria_propia(p) for p in productos)
     for producto in productos:
         if producto.get("modelo") and producto.get("marca"):
             continue
         categoria = categoria_propia(producto)
         if not categoria:
             continue
-        candidatos = [m for m in modelos.values() if m[2] == categoria]
-        if len({(m[0], ia.texto_normalizado(m[1])) for m in candidatos}) == 1:
-            marca, modelo, _, archivo = candidatos[0]
+        marca_existente = (detectar_marca(producto.get("marca")) or producto.get("marca")
+                           or detectar_marca(producto.get("producto")))
+        _, modelo_propio, _ = detectar_modelo(producto.get("producto"))
+        modelo_existente = producto.get("modelo") or modelo_propio
+        candidatos = []
+        for evidencias in modelos.values():
+            for m in evidencias:
+                if m[2] != categoria or (marca_existente and norm(marca_existente) != norm(m[0])):
+                    continue
+                if modelo_existente and norm(modelo_existente) != norm(m[1]):
+                    continue
+                tipo = ia.subcategoria_producto(producto)
+                tipo_modelo = ia.subcategoria_producto({"producto": m[1], "categoria": m[2]})
+                if tipo not in (None, "equipo (sin especificar)") and tipo_modelo not in (
+                        None, "equipo (sin especificar)") and tipo != tipo_modelo:
+                    continue
+                item = producto.get("item")
+                if not item:
+                    referencia = re.search(r"\b(?:tipo|item)\s*(\d+)\b", norm(producto.get("producto")))
+                    item = referencia.group(1) if referencia else None
+                coincide_item = bool(item and re.search(
+                    rf"\b(?:item|tipo|producto|equipo)\s*(?:n[°o.]?\s*)?{re.escape(str(item))}\b", norm(m[4])))
+                referencias = re.findall(r"\b(?:item|tipo|producto|equipo)\s*(?:n[°o.]?\s*)?(\d+)\b", norm(m[4]))
+                if item and referencias and not coincide_item:
+                    continue
+                if conteo[categoria] == 1 or coincide_item:
+                    candidatos.append((*m, coincide_item))
+        if len({(m[0], norm(m[1])) for m in candidatos}) == 1:
+            marca, modelo, _, archivo, linea, por_item = candidatos[0]
             producto["marca"] = producto.get("marca") or marca
             producto["modelo"] = producto.get("modelo") or modelo
             producto["fuente_producto"] = archivo
+            producto["evidencia_producto"] = linea
+            producto["metodo_identidad"] = "cruce_item" if por_item else "cruce_unico_proveedor"
             producto["marca_modelo_desde_otro_documento"] = True
     return productos
 
@@ -779,6 +889,11 @@ def procesar_proveedor(carpeta, args, seven_zip):
     archivos = []
     for path in sorted(ia.listar_archivos_oferta(carpeta), key=ia.prioridad):
         relativo = str(path.relative_to(carpeta))
+        if es_documento_historico(relativo):
+            archivos.append({"archivo": relativo, "tipo": path.suffix.lower(),
+                             "tipo_documental": ia.tipo_documental(path.name),
+                             "estado_lectura": "excluido_historico", "metodos": [], "filas_extraidas": 0})
+            continue
         grillas, texto, estado = leer_archivo(path, args)
         textos[relativo] = texto
         productos, metodos = extraer_de_grillas(grillas) if estado == "ok" else ([], set())
@@ -801,9 +916,9 @@ def procesar_proveedor(carpeta, args, seven_zip):
             "filas_extraidas": len(productos),
         })
 
-    crudos = [p for p in crudos if categoria_propia(p)]  # alcance segun el texto propio de la fila
+    crudos = fusionar_productos_reglas([p for p in crudos if categoria_propia(p)])
     crudos = completar_desde_otros_documentos(crudos, textos)
-    relevantes = ia.filtrar_productos_relevantes([dict(p) for p in crudos])
+    relevantes = [{**p, "categoria": categoria_propia(p)} for p in crudos if categoria_propia(p)]
     for producto in relevantes:
         producto["subcategoria"] = ia.subcategoria_producto(producto)
     productos = ia.validar_productos([dict(p) for p in relevantes], relevantes, total_oferta)
@@ -969,7 +1084,7 @@ def main():
         "id_revision", "codigo", "nombre_licitacion", "proveedor", "rut", "estado_validacion", "metodo", "producto",
         "marca", "modelo", "categoria", "subcategoria", "cantidad", "precio_unitario", "precio_total", "moneda",
         "con_iva", "nota_iva", "total_calculado", "alertas", "archivo_fuente", "fuente_producto", "marca_modelo_desde_otro_documento",
-        "pagina", "fila_fuente", "evidencia",
+        "pagina", "fila_fuente", "evidencia", "evidencia_producto", "metodo_identidad",
     ], filas_productos)
     escribir_hoja(libro, "Resumen", [
         "codigo", "nombre_licitacion", "proveedor", "rut", "estado_reglas", "productos", "productos_ok",

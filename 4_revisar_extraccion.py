@@ -11,14 +11,14 @@ Por cada producto muestra:
   - Botones Correcto / Incorrecto / Dudoso y comentario. Las decisiones se guardan
     en el navegador y se exportan a CSV.
 
-Verificacion automatica: antes de dar una ubicacion por "exacta" se comprueba que
-el precio unitario aparece en el texto bajo el rectangulo. Si no, se busca el
-precio en el documento; si tampoco aparece, el producto se marca como
-"precio no encontrado en el documento".
+Verificacion automatica: antes de dar una ubicacion por "exacta" se comprueban
+descripcion, modelo y valores numericos en la fila. Una coincidencia solo de
+montos no confirma el producto. Las contradicciones de identidad se muestran
+como "descripcion de otro producto" y las evidencias ambiguas quedan parciales.
 
 Funciona con los resultados por reglas (extraccion_reglas.json, con coordenadas
-exactas) y con los de la IA (extraccion_ia.json): en ambos casos la fila se ubica
-buscando los montos en el documento y se verifica palabra por palabra.
+exactas) y con los de la IA (extraccion_ia.json): se verifican primero las
+coordenadas originales si existen; despues se busca por descripcion y montos.
 
 Uso:
   python 4_revisar_extraccion.py --dir ".\\lotes\\2025-11\\ofertas"
@@ -29,6 +29,7 @@ Luego abrir revision_reglas\\index.html (o revision_ia\\index.html) en Chrome o 
 import argparse
 import csv
 import html
+import hashlib
 import importlib.util
 import json
 import os
@@ -189,6 +190,64 @@ def tokens_descripcion(producto):
     return {t for t in texto.split() if len(t) >= 3 and t not in PALABRAS_VACIAS}
 
 
+def nombre_imagen_revision(identificador):
+    return re.sub(r"[^\w-]", "_", identificador)
+
+
+def verificar_descripcion(producto, texto):
+    """Los montos solos no prueban la identidad del bien de una fila."""
+    esperados = tokens_descripcion(producto)
+    if not esperados:
+        return "parcial", "falta descripcion del producto para verificar su identidad"
+    visibles = set(ia.texto_normalizado(texto).split())
+    categoria = ia.clasificar_producto({"producto": producto.get("producto"), "modelo": producto.get("modelo")})
+    otra_categoria = ia.clasificar_producto({"producto": texto})
+    if categoria and otra_categoria and categoria != otra_categoria:
+        return "descripcion_no_coincide", "la fila describe otro producto (categoria diferente)"
+    marca = str(producto.get("marca") or "").strip()
+    marcas_visibles = {m.lower() for m in ia.MARCAS if re.search(rf"\b{re.escape(m)}\b", texto, re.I)}
+    if marca and marcas_visibles and marca.lower() not in marcas_visibles:
+        return "descripcion_no_coincide", "la fila describe otro producto (marca diferente)"
+    codigos = {t for t in esperados if re.search(r"[a-z]", t) and re.search(r"\d", t)}
+    if codigos and not codigos & visibles:
+        if any(re.search(r"[a-z]", t) and re.search(r"\d", t) for t in visibles):
+            return "descripcion_no_coincide", "la fila describe otro producto (modelo diferente)"
+        return "parcial", "el modelo no esta en la fila; revisar descripcion en varias lineas"
+    if codigos - visibles:
+        return "parcial", "no se puede confirmar el modelo completo en la fila"
+    numeros_descripcion = {t for t in esperados if t.isdigit()}
+    if numeros_descripcion - visibles:
+        return "parcial", "faltan numeros de modelo/especificacion de la descripcion; revisar la identidad"
+    genericos = {"notebook", "laptop", "computador", "computadora", "desktop", "equipo", "monitor",
+                 "impresora", "multifuncional", "tipo", "unidad", "unidades", "precio", "total"}
+    especificos = {t for t in esperados - genericos if not t.isdigit()}
+    if especificos and not especificos & visibles:
+        return "parcial", "la descripcion no permite confirmar que sea el mismo producto"
+    if not esperados & visibles:
+        return "parcial", "la descripcion no esta en la misma fila (puede ocupar varias lineas)"
+    return "exacto", ""
+
+
+def estado_fila(producto, texto, faltan):
+    estado, nota = verificar_descripcion(producto, texto)
+    notas = [nota] if nota else []
+    if faltan:
+        notas.append("la fila marcada NO contiene: " + ", ".join(faltan) + " (revisar datos de otras filas)")
+        if estado == "exacto":
+            estado = "parcial"
+    return estado, "; ".join(notas)
+
+
+def decidir_automatica_producto(producto, evidencia, comparacion):
+    """Sugerencia de revision; nunca reemplaza la decision manual del usuario."""
+    if evidencia.get("ubicado") == "descripcion_no_coincide":
+        return "incorrecto"
+    if (evidencia.get("ubicado") == "exacto" and comparacion == "mismo_precio"
+            and producto.get("estado_validacion") not in ("inconsistente", "incompleto")):
+        return "correcto"
+    return "dudoso"
+
+
 def evaluar_linea(palabras, banda, producto):
     """Que datos del producto aparecen en la linea (banda horizontal en coordenadas visuales)."""
     en_linea = [(v, r, t) for v, r, t in palabras if banda.y0 <= (v.y0 + v.y1) / 2 <= banda.y1]
@@ -228,6 +287,41 @@ def dibujar_y_recortar(documento, indice_pagina, marcas, recorte_visual, ruta_im
     return ruta_final
 
 
+def evidencia_pdf_coordenadas(documento, producto, ruta_imagen, dpi):
+    """Verifica los datos dentro del bbox original; no confia solo en sus coordenadas."""
+    ubicacion = producto.get("ubicacion") or {}
+    caja = ubicacion.get("bbox_fila")
+    try:
+        indice = int(ubicacion.get("pagina")) - 1
+        if not caja or len(caja) != 4 or not 0 <= indice < len(documento):
+            return None
+        rect = fitz.Rect(caja)
+        if rect.is_empty or rect.is_infinite:
+            return None
+    except (TypeError, ValueError):
+        return None
+    pagina = documento[indice]
+    palabras = [p for p in palabras_visuales(pagina)
+                if rect.contains((p[1].tl + p[1].br) / 2)]
+    if not palabras:
+        return None
+    visual = rect * pagina.rotation_matrix
+    encontrado, _, en_linea = evaluar_linea(palabras, visual, producto)
+    faltan = [nombre for campo, clave, nombre in (("precio_unitario", "unitario", "precio unitario"),
+                                                 ("precio_total", "total", "total"),
+                                                 ("cantidad", "cantidad", "cantidad"))
+              if isinstance(producto.get(campo), (int, float)) and not encontrado[clave]]
+    texto = " ".join(p[2] for p in en_linea)
+    estado, nota = estado_fila(producto, texto, faltan)
+    marcas = [(r, COLOR_CELDA[tipo], True) for tipo, r in encontrado.items() if r is not None]
+    marcas.append((rect, COLOR_FILA, False))
+    recorte = fitz.Rect(pagina.rect.x0, max(pagina.rect.y0, visual.y0 - 45),
+                        pagina.rect.x1, min(pagina.rect.y1, visual.y1 + 30))
+    imagen = dibujar_y_recortar(documento, indice, marcas, recorte, ruta_imagen, dpi)
+    return {"imagen": imagen, "pagina": indice + 1, "ubicado": estado,
+            "nota": "coordenadas originales verificadas" + ("; " + nota if nota else "")}
+
+
 def evidencia_pdf(documentos, ruta, producto, ruta_imagen, dpi):
     """Ubica la fila del producto buscando sus montos con PyMuPDF (el mismo sistema de
     coordenadas que se usa para dibujar) y la verifica palabra por palabra.
@@ -235,12 +329,15 @@ def evidencia_pdf(documentos, ruta, producto, ruta_imagen, dpi):
     la cantidad y palabras de la descripcion."""
     documento = documentos.pdf(ruta)
     ubicacion = producto.get("ubicacion") or {}
+    coordenadas = evidencia_pdf_coordenadas(documento, producto, ruta_imagen, dpi)
+    if coordenadas and coordenadas["ubicado"] == "exacto":
+        return coordenadas
     pagina_num = ubicacion.get("pagina") or producto.get("pagina")
     try:
         pagina_num = int(pagina_num) if pagina_num else None
     except (TypeError, ValueError):
         pagina_num = None
-    paginas = list(range(min(len(documento), 30)))
+    paginas = list(range(len(documento)))
     if pagina_num and 1 <= pagina_num <= len(documento):
         paginas.remove(pagina_num - 1)
         paginas.insert(0, pagina_num - 1)
@@ -256,17 +353,20 @@ def evidencia_pdf(documentos, ruta, producto, ruta_imagen, dpi):
                     continue
                 banda = fitz.Rect(pagina.rect.x0, visual.y0 - 1.5, pagina.rect.x1, visual.y1 + 1.5)
                 encontrado, coincidencias, en_linea = evaluar_linea(palabras, banda, producto)
+                identidad, _ = verificar_descripcion(producto, " ".join(p[2] for p in en_linea))
                 puntaje = (3 * bool(encontrado["unitario"]) + 2 * bool(encontrado["total"])
                            + 2 * bool(encontrado["cantidad"]) + min(coincidencias, 3)
                            + (1 if indice == (pagina_num or 0) - 1 else 0))
+                # La identidad pesa mas que cifras coincidentes de un producto distinto.
+                puntaje += {"exacto": 20, "parcial": 0, "descripcion_no_coincide": -20}[identidad]
                 if mejor is None or puntaje > mejor[0]:
                     mejor = (puntaje, indice, banda, encontrado, coincidencias, en_linea)
-            if mejor and mejor[3]["unitario"]:
-                break  # anclado por el unitario; no hace falta probar con el total
-        if mejor and mejor[0] >= 8:
+        if mejor and mejor[0] >= 28:
             break  # linea con unitario, total, cantidad y descripcion en la pagina esperada
 
     if mejor is None:
+        if coordenadas:
+            return coordenadas
         return {"pagina": pagina_num, "ubicado": "no_encontrado",
                 "nota": "el precio no aparece como texto en el PDF (escaneado o monto inexistente)"}
 
@@ -291,17 +391,10 @@ def evidencia_pdf(documentos, ruta, producto, ruta_imagen, dpi):
                                pagina.rect.x1, min(pagina.rect.y1, banda.y1 + 30))
     imagen = dibujar_y_recortar(documento, indice, marcas, recorte_visual, ruta_imagen, dpi)
 
-    notas = []
-    if faltan:
-        estado = "parcial"
-        notas.append("la linea marcada NO contiene: " + ", ".join(faltan) + " (revisar si esos datos vienen de otra fila)")
-    else:
-        estado = "exacto"
-        if ubicacion.get("continuacion"):
-            notas.append("la tabla continua de la pagina anterior (el encabezado esta alli)")
-    if coincidencias == 0 and tokens_descripcion(producto):
-        notas.append("la descripcion no esta en la misma linea (puede ocupar varias lineas)")
-    return {"imagen": imagen, "pagina": indice + 1, "ubicado": estado, "nota": "; ".join(notas)}
+    estado, nota = estado_fila(producto, " ".join(p[2] for p in en_linea), faltan)
+    if ubicacion.get("continuacion"):
+        nota += "; la tabla continua de la pagina anterior (el encabezado esta alli)"
+    return {"imagen": imagen, "pagina": indice + 1, "ubicado": estado, "nota": nota}
 
 
 # ---------------------------------------------------------------------------
@@ -318,17 +411,23 @@ def celda_con_valor(fila, valor):
 
 
 def fila_con_monto(filas, producto):
+    mejor = None
     for campo in ("precio_unitario", "precio_total"):
         objetivo = producto.get(campo)
         if not isinstance(objetivo, (int, float)) or objetivo <= 0:
             continue
         for indice, fila in enumerate(filas):
-            for celda in fila:
-                if isinstance(celda, (int, float)) and abs(celda - objetivo) <= 0.5:
-                    return indice
-                if isinstance(celda, str) and texto_contiene_monto(celda, objetivo) and len(re.sub(r"\D", "", celda)) <= len(digitos(objetivo)) + 2:
-                    return indice
-    return None
+            if not celda_con_valor(fila, objetivo):
+                continue
+            texto = " ".join(celda_texto(c) for c in fila)
+            identidad, _ = verificar_descripcion(producto, texto)
+            puntaje = {"exacto": 20, "parcial": 0, "descripcion_no_coincide": -20}[identidad]
+            puntaje += sum(celda_con_valor(fila, producto[c]) for c in
+                           ("precio_unitario", "precio_total", "cantidad")
+                           if isinstance(producto.get(c), (int, float)))
+            if mejor is None or puntaje > mejor[0]:
+                mejor = (puntaje, indice)
+    return mejor[1] if mejor else None
 
 
 def tabla_html(filas, fila_objetivo, fila_encabezado, columnas, titulo):
@@ -388,7 +487,9 @@ def evidencia_tabular(documentos, ruta, producto):
         filas, titulo = documentos.filas_csv(ruta), "CSV"
 
     fila = ubicacion.get("fila")
-    if fila is None or fila >= len(filas) or fila_con_monto([filas[fila]], producto) is None:
+    valida = isinstance(fila, int) and 0 <= fila < len(filas)
+    if (not valida or fila_con_monto([filas[fila]], producto) is None
+            or verificar_descripcion(producto, " ".join(celda_texto(c) for c in filas[fila]))[0] != "exacto"):
         fila = fila_con_monto(filas, producto)
         encabezado, columnas = None, {}
     else:
@@ -399,10 +500,8 @@ def evidencia_tabular(documentos, ruta, producto):
     faltan = [nombre for campo, nombre in (("precio_unitario", "precio unitario"), ("precio_total", "total"),
                                            ("cantidad", "cantidad"))
               if isinstance(producto.get(campo), (int, float)) and not celda_con_valor(filas[fila], producto[campo])]
-    if faltan:
-        return {"html": tabla, "ubicado": "parcial",
-                "nota": "la fila marcada NO contiene: " + ", ".join(faltan) + " (revisar si esos datos vienen de otra fila)"}
-    return {"html": tabla, "ubicado": "exacto", "nota": ""}
+    estado, nota = estado_fila(producto, " ".join(celda_texto(c) for c in filas[fila]), faltan)
+    return {"html": tabla, "ubicado": estado, "nota": nota}
 
 
 # ---------------------------------------------------------------------------
@@ -521,22 +620,27 @@ def main():
                 }
                 rutas = archivos_candidatos(producto, carpeta) if carpeta else []
                 evidencia = {"ubicado": "sin_archivo", "nota": "no se encontro el archivo fuente"}
+                prioridades = {"sin_archivo": 0, "no_encontrado": 1, "descripcion_no_coincide": 2,
+                               "parcial": 3, "exacto": 4}
                 for ruta in rutas:
                     try:
                         if ruta.suffix.lower() == ".pdf":
-                            nombre_imagen = re.sub(r"[^\w-]", "_", identificador)  # sin puntos (RUT 76.596.570-5)
-                            evidencia = evidencia_pdf(documentos, ruta, producto, carpeta_img / nombre_imagen, args.dpi)
+                            sufijo = hashlib.sha1(str(ruta).encode("utf-8")).hexdigest()[:8]
+                            nombre_imagen = nombre_imagen_revision(identificador + "__" + sufijo)
+                            candidata = evidencia_pdf(documentos, ruta, producto, carpeta_img / nombre_imagen, args.dpi)
                         elif ruta.suffix.lower() in (".xlsx", ".xlsm", ".docx", ".csv", ".tsv", ".txt"):
-                            evidencia = evidencia_tabular(documentos, ruta, producto)
+                            candidata = evidencia_tabular(documentos, ruta, producto)
                         elif ruta.suffix.lower() in ia.EXTENSIONES_IMAGEN:
-                            evidencia = {"imagen_original": ruta, "ubicado": "no_encontrado",
+                            candidata = {"imagen_original": ruta, "ubicado": "no_encontrado",
                                          "nota": "imagen: revisar a mano"}
                         else:
                             continue
                     except Exception as exc:
-                        evidencia = {"ubicado": "no_encontrado", "nota": f"error al generar evidencia: {exc}"}
-                    evidencia["archivo"] = ruta
-                    if evidencia["ubicado"] in ("exacto", "parcial"):
+                        candidata = {"ubicado": "no_encontrado", "nota": f"error al generar evidencia: {exc}"}
+                    candidata["archivo"] = ruta
+                    if prioridades[candidata["ubicado"]] > prioridades[evidencia["ubicado"]]:
+                        evidencia = candidata
+                    if evidencia["ubicado"] == "exacto":
                         break
                 conteo[evidencia["ubicado"]] = conteo.get(evidencia["ubicado"], 0) + 1
                 if evidencia.get("archivo"):
@@ -548,6 +652,8 @@ def main():
                 registro["pagina"] = evidencia.get("pagina")
                 registro["ubicado"] = evidencia["ubicado"]
                 registro["nota"] = evidencia.get("nota", "")
+                registro["sugerencia_automatica"] = decidir_automatica_producto(
+                    producto, evidencia, registro["otro_metodo"])
                 if evidencia.get("imagen"):
                     registro["imagen"] = enlace_relativo(evidencia["imagen"], salida)
                 if evidencia.get("imagen_original"):
@@ -572,6 +678,7 @@ def main():
     print(f"Productos: {len(registros)}")
     print(f"  fila verificada:               {conteo.get('exacto', 0)}")
     print(f"  datos que NO calzan con la fila: {conteo.get('parcial', 0)}   <- revisar primero")
+    print(f"  descripcion de otro producto:  {conteo.get('descripcion_no_coincide', 0)}   <- revisar primero")
     print(f"  precio NO encontrado:          {conteo.get('no_encontrado', 0)}   <- revisar primero")
     print(f"  sin archivo fuente:            {conteo.get('sin_archivo', 0)}")
     print(f"Abrir en Chrome o Edge: {salida / 'index.html'}")
@@ -621,7 +728,7 @@ a{color:var(--azul)}
   <h1>__TITULO__</h1>
   <div class="filtros">
     <input id="f-texto" placeholder="Buscar proveedor, producto, modelo..." size="30">
-    <select id="f-ubicado"><option value="">Ubicación: todas</option><option value="no_encontrado">Precio NO encontrado</option><option value="parcial">Datos no calzan con la fila</option><option value="exacto">Fila verificada</option><option value="sin_archivo">Sin archivo</option></select>
+    <select id="f-ubicado"><option value="">Ubicación: todas</option><option value="no_encontrado">Precio NO encontrado</option><option value="descripcion_no_coincide">Descripción de otro producto</option><option value="parcial">Datos no calzan con la fila</option><option value="exacto">Fila verificada</option><option value="sin_archivo">Sin archivo</option></select>
     <select id="f-validacion"><option value="">Validación: todas</option><option>ok</option><option>revisar</option><option>incompleto</option><option>inconsistente</option></select>
     <select id="f-otro"><option value="">Otro método: todos</option><option value="precio_distinto">Precio distinto</option><option value="mismo_precio">Mismo precio</option><option value="otro_sin_precios">Otro sin precios</option></select>
     <select id="f-decision"><option value="">Revisión: todas</option><option value="pendiente">Sin revisar</option><option value="correcto">Correcto</option><option value="incorrecto">Incorrecto</option><option value="dudoso">Dudoso</option></select>
@@ -687,6 +794,7 @@ function estadisticas(lista) {
 
 function badgeUbicado(d) {
   if (d.ubicado === "exacto") return '<span class="badge b-ok">fila verificada</span>';
+  if (d.ubicado === "descripcion_no_coincide") return '<span class="badge b-mal">descripcion de otro producto</span>';
   if (d.ubicado === "parcial") return '<span class="badge b-mal">datos no calzan con la fila</span>';
   if (d.ubicado === "sin_archivo") return '<span class="badge b-mal">sin archivo fuente</span>';
   return '<span class="badge b-mal">precio NO encontrado en el documento</span>';
@@ -714,7 +822,7 @@ function tarjeta(d) {
       <div><b>Precio unitario</b>${monto(d.precio_unitario)} ${esc(d.moneda || "")}</div><div><b>Total</b>${monto(d.precio_total)}</div>
       <div><b>Método</b>${esc(d.metodo || "—")}</div></div>
     ${d.alertas.length ? `<div>${d.alertas.map(a => `<span class="badge b-duda">${esc(a)}</span>`).join("")}</div>` : ""}
-    ${d.nota && (d.imagen || d.tabla_html) ? `<div class="${d.ubicado === "parcial" ? "aviso" : "sub"}">${esc(d.nota)}</div>` : ""}
+    ${d.nota && (d.imagen || d.tabla_html) ? `<div class="${["parcial", "descripcion_no_coincide"].includes(d.ubicado) ? "aviso" : "sub"}">${esc(d.nota)}</div>` : ""}
     <div class="evidencia">${evidencia}</div>
     <div class="acciones">
       <button data-id="${esc(d.id)}" data-d="correcto" class="${dec.decision==="correcto"?"sel-correcto":""}">✔ Correcto</button>

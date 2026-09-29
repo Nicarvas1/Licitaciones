@@ -2,7 +2,7 @@
 Pruebas del extractor por reglas (3_extraer_reglas.py).
 
 Ejecutar desde la raiz del proyecto:
-    python -m unittest tests.test_extraer_reglas -v
+    python -m unittest test_extraer_reglas -v
 """
 
 import importlib.util
@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-RAIZ = Path(__file__).resolve().parents[1]
+RAIZ = Path(__file__).resolve().parent
 if str(RAIZ) not in sys.path:
     sys.path.insert(0, str(RAIZ))
 

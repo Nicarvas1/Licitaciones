@@ -48,7 +48,7 @@ class ExtractorReglasTest(unittest.TestCase):
                 self.assertTrue(reglas.es_documento_historico(nombre))
         self.assertFalse(reglas.es_documento_historico("Oferta_Economica_1057062.pdf"))
 
-    def test_fusiona_anexo_generico_con_cotizacion_detallada(self):
+    def test_no_fusiona_marcas_distintas_por_coincidencia_de_precio(self):
         generico = {
             "producto": "MONITOR MSI 27 FHD",
             "categoria": "monitor",
@@ -68,10 +68,63 @@ class ExtractorReglasTest(unittest.TestCase):
             "archivo_fuente": "economico__01__COTIZACION_INTERNA_ALCA.pdf",
         }
         resultado = reglas.fusionar_productos_reglas([generico, detallado])
+        self.assertEqual(len(resultado), 2)
+        self.assertEqual(resultado[0]["producto"], "MONITOR MSI 27 FHD")
+        self.assertEqual(resultado[1]["marca"], "AOC")
+
+    def test_fusiona_mismo_item_sin_perder_fuentes(self):
+        generico = {"item": "2", "producto": "Monitor AOC", "marca": "AOC", "categoria": "monitor",
+                    "cantidad": 1, "precio_unitario": 79950, "archivo_fuente": "economico.pdf"}
+        detallado = {"item": "2", "producto": "Monitor AOC 27E3H2", "marca": "AOC", "modelo": "27E3H2",
+                     "categoria": "monitor", "archivo_fuente": "tecnico.pdf"}
+        resultado = reglas.fusionar_productos_reglas([generico, detallado])
         self.assertEqual(len(resultado), 1)
-        self.assertEqual(resultado[0]["marca"], "AOC")
+        self.assertEqual(resultado[0]["precio_unitario"], 79950)
         self.assertEqual(resultado[0]["modelo"], "27E3H2")
-        self.assertEqual(len(resultado[0]["fuentes_respaldo"]), 2)
+        self.assertEqual(resultado[0]["fuentes_respaldo"], ["economico.pdf", "tecnico.pdf"])
+
+    def test_cruce_por_tipo_explicito_permite_varios_productos(self):
+        productos = [{"producto": "Notebook tipo 1", "categoria": "equipo"},
+                     {"producto": "Notebook tipo 2", "categoria": "equipo"}]
+        resultado = reglas.completar_desde_otros_documentos(
+            productos, {"ficha.pdf": "Tipo 1: Notebook HP ProBook 440 G11\nTipo 2: Notebook Dell Latitude 3540"})
+        self.assertEqual([p["marca"] for p in resultado], ["HP", "Dell"])
+        self.assertTrue(all(p["metodo_identidad"] == "cruce_item" for p in resultado))
+
+    def test_no_toma_modelos_desde_facturas_historicas(self):
+        productos = [{"producto": "Notebook tipo 1", "categoria": "equipo"}]
+        resultado = reglas.completar_desde_otros_documentos(
+            productos, {"factura_2024.pdf": "Notebook HP ProBook 440 G11"})
+        self.assertIsNone(resultado[0].get("modelo"))
+
+    def test_no_cruza_tipo_distinto_aunque_solo_haya_un_producto(self):
+        producto = {"producto": "Notebook tipo 1", "categoria": "equipo"}
+        resultado = reglas.completar_desde_otros_documentos(
+            [producto], {"ficha.pdf": "Tipo 2: Notebook HP ProBook 440 G11"})
+        self.assertIsNone(resultado[0].get("modelo"))
+
+    def test_no_cruza_modelo_distinto_de_la_misma_marca(self):
+        producto = {"producto": "Notebook HP ProBook 440 G11", "categoria": "equipo", "marca": "HP"}
+        resultado = reglas.completar_desde_otros_documentos(
+            [producto], {"ficha.pdf": "Notebook HP ProBook 450 G11"})
+        self.assertIsNone(resultado[0].get("modelo"))
+
+    def test_filas_distintas_del_mismo_anexo_no_se_fusionan(self):
+        producto = {"producto": "Notebook HP", "categoria": "equipo", "marca": "HP",
+                    "cantidad": 2, "precio_unitario": 100000, "archivo_fuente": "oferta.xlsx"}
+        resultado = reglas.fusionar_productos_reglas([
+            {**producto, "ubicacion": {"hoja": "Oferta", "fila": 1}},
+            {**producto, "ubicacion": {"hoja": "Oferta", "fila": 2}},
+        ])
+        self.assertEqual(len(resultado), 2)
+
+    def test_no_fusiona_conflictos_de_cantidad_o_precio(self):
+        producto = {"item": "1", "producto": "Notebook HP ProBook 440 G11", "categoria": "equipo",
+                    "marca": "HP", "modelo": "ProBook 440 G11", "cantidad": 2, "precio_unitario": 100000}
+        for cambio in ({"cantidad": 3}, {"precio_unitario": 100500}):
+            with self.subTest(cambio=cambio):
+                resultado = reglas.fusionar_productos_reglas([producto, {**producto, **cambio}])
+                self.assertEqual(len(resultado), 2)
 
     def test_no_completa_modelo_si_hay_varios_productos_incompletos(self):
         productos = [

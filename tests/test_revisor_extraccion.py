@@ -13,6 +13,84 @@ SPEC.loader.exec_module(revisor)
 
 
 class RevisorExtraccionTest(unittest.TestCase):
+    def test_modelos_con_misma_familia_no_se_verifican_por_marca_sola(self):
+        producto = {"producto": "Notebook HP ProBook 440 G11", "modelo": "ProBook 440 G11", "marca": "HP"}
+        estado, _ = revisor.verificar_descripcion(producto, "Notebook HP ProBook 450 G11 2 100000 200000")
+        self.assertNotEqual(estado, "exacto")
+
+    def test_montos_sin_descripcion_quedan_para_revision(self):
+        estado, _ = revisor.verificar_descripcion({"precio_unitario": 200000}, "Monitor Samsung 200000")
+        self.assertEqual(estado, "parcial")
+
+    def test_busqueda_pdf_no_confirma_producto_distinto_sin_bbox(self):
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta = Path(directorio) / "tabla.pdf"
+            with pymupdf.open() as doc:
+                doc.new_page().insert_text((50, 100), "Monitor Samsung 27 1 200000 200000")
+                doc.save(ruta)
+            docs = revisor.Documentos()
+            try:
+                producto = {"producto": "Impresora Brother HL1202", "cantidad": 1,
+                            "precio_unitario": 200000, "precio_total": 200000}
+                evidencia = revisor.evidencia_pdf(docs, ruta, producto, Path(directorio) / "evidencia", 72)
+                self.assertEqual(evidencia["ubicado"], "descripcion_no_coincide")
+            finally:
+                docs.cerrar()
+
+    def test_tabla_no_confirma_producto_distinto_por_precio(self):
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta = Path(directorio) / "oferta.xlsx"
+            libro = Workbook()
+            libro.active.append(["Monitor Samsung 27", 1, 200000, 200000])
+            libro.save(ruta)
+            producto = {"producto": "Impresora Brother HL1202", "cantidad": 1,
+                        "precio_unitario": 200000, "precio_total": 200000}
+            evidencia = revisor.evidencia_tabular(revisor.Documentos(), ruta, producto)
+            self.assertEqual(evidencia["ubicado"], "descripcion_no_coincide")
+
+    def test_tabla_elige_producto_correcto_si_se_repite_precio(self):
+        producto = {"producto": "Impresora Brother HL1202", "cantidad": 1,
+                    "precio_unitario": 200000, "precio_total": 200000}
+        filas = [["Monitor Samsung 27", 1, 200000, 200000],
+                 ["Impresora Brother HL1202", 1, 200000, 200000]]
+        self.assertEqual(revisor.fila_con_monto(filas, producto), 1)
+
+    def test_html_muestra_descripcion_distinta_y_conserva_mejor_evidencia(self):
+        import contextlib
+        import io
+        import json
+        import sys
+        from unittest import mock
+        from openpyxl import Workbook
+
+        with tempfile.TemporaryDirectory() as directorio:
+            raiz = Path(directorio)
+            ofertas = raiz / "ofertas"
+            licitacion = ofertas / "LIC-1"
+            carpeta = licitacion / "1__Proveedor"
+            carpeta.mkdir(parents=True)
+            (carpeta / "oferta.json").write_text(json.dumps({"rut": "1", "proveedor": "Proveedor"}), encoding="utf-8")
+            libro = Workbook()
+            libro.active.append(["Monitor Samsung 27", 1, 200000, 200000])
+            libro.save(carpeta / "economico.xlsx")
+            (carpeta / "tecnico.txt").write_text("Declaracion sin precios", encoding="utf-8")
+            producto = {"producto": "Impresora Brother HL1202", "cantidad": 1,
+                        "precio_unitario": 200000, "precio_total": 200000,
+                        "archivo_fuente": "economico.xlsx", "fuentes_respaldo": ["tecnico.txt"]}
+            (licitacion / "extraccion_ia.json").write_text(
+                json.dumps([{"rut": "1", "proveedor": "Proveedor", "productos": [producto]}]), encoding="utf-8")
+            salida = raiz / "revision"
+            with mock.patch.object(sys, "argv", ["4_revisar_extraccion.py", "--dir", str(ofertas),
+                                                  "--fuente", "ia", "--salida", str(salida)]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                revisor.main()
+            pagina = (salida / "index.html").read_text(encoding="utf-8")
+            self.assertIn('"ubicado": "descripcion_no_coincide"', pagina)
+            self.assertIn('"sugerencia_automatica": "incorrecto"', pagina)
+            self.assertIn('value="descripcion_no_coincide"', pagina)
+
     def test_nombre_imagen_no_colisiona_por_puntos_del_rut(self):
         primero = revisor.nombre_imagen_revision("2744-72-LE25__76.596.570-5__abc")
         segundo = revisor.nombre_imagen_revision("2744-72-LE25__76.596.570-5__xyz")

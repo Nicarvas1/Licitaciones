@@ -797,6 +797,9 @@ def normalizar_producto(producto, proveedor, rut, archivo, tipo_doc):
         "evidencia": producto.get("evidencia"),
         "fuente_producto": producto.get("fuente_producto"),
         "fuente_precio": producto.get("fuente_precio"),
+        "fuente_marca": producto.get("fuente_marca"),
+        "pagina_marca": normalizar_numero(producto.get("pagina_marca")),
+        "metodo_marca": producto.get("metodo_marca"),
         "archivo_fuente": archivo,
         "tipo_documental": tipo_doc
     }
@@ -917,6 +920,10 @@ def numeros_iguales(valor_a, valor_b, tolerancia=0.01):
 def productos_equivalentes(producto_a, producto_b):
     if producto_a.get("categoria") != producto_b.get("categoria"):
         return False
+    marca_a = texto_normalizado(producto_a.get("marca"))
+    marca_b = texto_normalizado(producto_b.get("marca"))
+    if marca_a and marca_b and marca_a != marca_b:
+        return False
     item_a = texto_normalizado(producto_a.get("item"))
     item_b = texto_normalizado(producto_b.get("item"))
     if item_a and item_b and item_a != item_b:
@@ -960,10 +967,52 @@ def deduplicar_productos(productos):
             "precio_unitario", "precio_total", "precio_total_tipo", "moneda", "evidencia",
             "pagina", "pagina_producto", "pagina_precio", "fila_fuente",
             "fuente_producto", "fuente_precio",
+            "fuente_marca", "pagina_marca", "metodo_marca",
         ):
             if not existente.get(campo) and producto.get(campo):
                 existente[campo] = producto[campo]
     return unicos
+
+
+def completar_marcas_desde_parciales(productos, parciales):
+    """Recupera una marca omitida solo con identidad concreta y fuentes univocas.
+
+    No usa precios, la marca mas frecuente del proveedor ni modelos de componentes.
+    Los hallazgos deben proceder del mismo proveedor (como ocurre en cada corrida).
+    """
+    resultado = []
+    for original in productos:
+        producto = dict(original)
+        resultado.append(producto)
+        if producto.get("marca"):
+            continue
+        candidatos = []
+        modelo = texto_normalizado(producto.get("modelo"))
+        descripcion = texto_normalizado(producto.get("producto"))
+        for parcial in parciales:
+            if not parcial.get("marca") or producto.get("categoria") != parcial.get("categoria"):
+                continue
+            if any(producto.get(campo) and parcial.get(campo)
+                   and texto_normalizado(producto[campo]) != texto_normalizado(parcial[campo])
+                   for campo in ("item", "proveedor", "rut")):
+                continue
+            modelo_parcial = texto_normalizado(parcial.get("modelo"))
+            if modelo and modelo_parcial and modelo != modelo_parcial:
+                continue
+            mismo_modelo = len(modelo) >= 4 and bool(re.search(r"\d", modelo)) and modelo == modelo_parcial
+            misma_descripcion = (len(descripcion) >= 10 and bool(re.search(r"\d", descripcion))
+                                 and descripcion == texto_normalizado(parcial.get("producto")))
+            if mismo_modelo or misma_descripcion:
+                candidatos.append(parcial)
+        marcas = {texto_normalizado(p["marca"]) for p in candidatos}
+        if len(marcas) != 1:
+            continue
+        fuente = candidatos[0]
+        producto["marca"] = fuente["marca"]
+        producto["fuente_marca"] = fuente.get("fuente_marca") or fuente.get("fuente_producto") or fuente.get("archivo_fuente")
+        producto["pagina_marca"] = fuente.get("pagina_marca") or fuente.get("pagina_producto") or fuente.get("pagina")
+        producto["metodo_marca"] = "cruce_identidad_exacta"
+    return resultado
 
 
 def coincide_con_parcial(producto, parcial):
@@ -1334,8 +1383,10 @@ def normalizar_consolidados(datos, respaldo, proveedor, rut):
 
 
 def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
+    respaldo_marcas = [dict(producto) for producto in parciales]
     parciales = deduplicar_productos(filtrar_productos_relevantes(parciales))
     if not parciales or args.sin_consolidar:
+        parciales = completar_marcas_desde_parciales(parciales, respaldo_marcas)
         return validar_productos(parciales, parciales, total_oferta), "omitida", "", "", {}
 
     lotes = dividir_registros_json(parciales, args.max_chars_consolidacion)
@@ -1385,6 +1436,7 @@ def consolidar_parciales(parciales, proveedor, rut, total_oferta, args):
             consumos.append(consumo)
 
     estado_final = "ok" if all(estado in ESTADOS_IA_OK for estado in estados) else "; ".join(estados)
+    consolidados = completar_marcas_desde_parciales(consolidados, respaldo_marcas)
     return (
         validar_productos(consolidados, parciales, total_oferta),
         estado_final,
@@ -1499,6 +1551,9 @@ def modo_extraccion(args):
 PATRON_PALABRA_PRODUCTO = re.compile(
     PATRON_EQUIPO_RELEVANTE.pattern + r"|monitor|impresora|multifuncional|all.?in.?one", re.I)
 PATRON_MARCA_PAGINA = re.compile(r"\b(?:" + "|".join(re.escape(m) for m in MARCAS) + r")\b", re.I)
+PATRON_IDENTIDAD_TECNICA = re.compile(r"\b(?:marca|modelo)\s*(?::|\||=)|\b(?:brand|model)\s*:", re.I)
+PATRON_ESPECIFICACION_TECNICA = re.compile(
+    r"procesador|\bram\b|\bssd\b|\bhdd\b|resoluci[oó]n|pulgadas|\b(?:ddr[345]|hdmi|displayport)\b", re.I)
 
 
 def compactar_texto(texto):
@@ -1509,11 +1564,13 @@ def compactar_texto(texto):
 
 
 def pagina_relevante(texto):
-    """Una pagina se envia si tiene montos, o si nombra un equipo junto con una marca
-    (anexo tecnico). Declaraciones, bases y formularios administrativos quedan fuera."""
+    """Conserva identidad y fichas tecnicas sin exigir una marca de nuestra lista."""
     if PATRON_MONTO.search(texto):
         return True
-    return bool(PATRON_PALABRA_PRODUCTO.search(texto) and PATRON_MARCA_PAGINA.search(texto))
+    if PATRON_PALABRA_PRODUCTO.search(texto) or PATRON_IDENTIDAD_TECNICA.search(texto):
+        return True
+    especificaciones = {m.group(0).lower() for m in PATRON_ESPECIFICACION_TECNICA.finditer(texto)}
+    return len(especificaciones) >= 2
 
 
 def dividir_bloque_proveedor(bloque, limite):
@@ -1622,7 +1679,7 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
         if texto.strip():
             bloque = {"archivo": relativo, "pagina": None,
                       "texto": compactar_texto(texto), "imagen": None}
-            if PATRON_MONTO.search(texto) or PATRON_PALABRA_PRODUCTO.search(texto):
+            if pagina_relevante(texto):
                 bloques.append(bloque)
                 registro["paginas_enviadas"] = ["todo"]
             else:
@@ -1764,6 +1821,7 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
         llamadas += consumo_consolidacion.get("llamadas", 0)
     else:
         productos, estado_consolidacion, consumo_consolidacion = relevantes, "omitida", {}
+    productos = completar_marcas_desde_parciales(productos, parciales)
 
     return {
         "proveedor": proveedor,
@@ -2174,7 +2232,8 @@ def generar_excel(productos, consumos, resumenes, ruta):
                 )
         else:
             agregar_fuente(fuentes, "Fuente", archivo_base, producto.get("pagina"))
-        fuentes_primarias = {archivo_base, archivo_producto, archivo_precio}
+        agregar_fuente(fuentes, "Marca", producto.get("fuente_marca"), producto.get("pagina_marca"))
+        fuentes_primarias = {archivo_base, archivo_producto, archivo_precio, producto.get("fuente_marca")}
         for archivo in producto.get("fuentes_respaldo") or []:
             if archivo not in fuentes_primarias:
                 agregar_fuente(fuentes, "Respaldo", archivo)
