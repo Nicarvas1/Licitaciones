@@ -39,6 +39,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import zipfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
@@ -99,7 +100,7 @@ MARCAS = [
     "HP", "Lenovo", "Dell", "Asus", "Acer", "Apple", "Samsung", "Lexmark",
     "Epson", "Canon", "Brother", "MSI", "Huawei", "Kingston", "Logitech",
     "LG", "ThinkCentre", "ThinkPad", "ProOne", "ProDesk", "OptiPlex",
-    "Latitude", "Pavilion"
+    "Latitude", "Pavilion", "Ozxen", "OMA", "SNAKE"
 ]
 
 from prompts_extraccion import (
@@ -125,26 +126,46 @@ def limpiar_control(texto):
     return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(texto))
 
 
+def ruta_sistema(path):
+    """Ruta para E/S de Windows sin MAX_PATH; nunca se guarda en fuentes o JSON."""
+    ruta = os.fspath(path)
+    if os.name != "nt":
+        return ruta
+    absoluta = os.path.abspath(ruta)
+    if absoluta.startswith("\\\\?\\"):
+        return absoluta
+    if absoluta.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + absoluta.lstrip("\\")
+    return "\\\\?\\" + absoluta
+
+
 def cargar_json(path):
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        with open(ruta_sistema(path), encoding="utf-8") as archivo:
+            return json.load(archivo)
     except Exception:
         return {}
 
 
 def escribir_json_atomico(path, datos):
     temporal = path.with_suffix(path.suffix + ".tmp")
-    temporal.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(temporal, path)
+    with open(ruta_sistema(temporal), "w", encoding="utf-8") as archivo:
+        json.dump(datos, archivo, ensure_ascii=False, indent=2)
+    os.replace(ruta_sistema(temporal), ruta_sistema(path))
+
+
+def escribir_texto(path, contenido):
+    with open(ruta_sistema(path), "w", encoding="utf-8") as archivo:
+        archivo.write(contenido)
 
 
 def cargar_metadata_licitaciones(ruta):
     ruta = Path(ruta)
-    if not ruta.is_file():
+    if not os.path.isfile(ruta_sistema(ruta)):
         return {}
     for encoding in ("utf-8-sig", "latin-1"):
         try:
-            with ruta.open(encoding=encoding, newline="") as archivo:
+            with open(ruta_sistema(ruta), encoding=encoding, newline="") as archivo:
                 filas = list(csv.DictReader(archivo))
             break
         except UnicodeDecodeError:
@@ -161,6 +182,21 @@ def cargar_metadata_licitaciones(ruta):
         for fila in filas
         if (fila.get("codigo") or "").strip()
     }
+
+
+def cargar_metadata_para_corrida(licitaciones, ruta_explicitada=None):
+    """Combina catalogo global y CSV mensuales; un CSV indicado por el usuario prevalece."""
+    catalogo = Path(__file__).resolve().parent / "lotes" / "catalogo_licitaciones.csv"
+    fuentes = [catalogo]
+    meses = sorted({licitacion.parent.parent for licitacion in licitaciones
+                    if licitacion.parent.name.lower() == "ofertas"}, key=str)
+    fuentes.extend(mes / "para_scrapear.csv" for mes in meses)
+    if ruta_explicitada:
+        fuentes.append(Path(ruta_explicitada))
+    metadata = {}
+    for fuente in dict.fromkeys(fuentes):
+        metadata.update(cargar_metadata_licitaciones(fuente))
+    return metadata
 
 
 def extraer_pdf_ocr(
@@ -181,7 +217,7 @@ def extraer_pdf_ocr(
         renders = []
         escala = dpi / 72
         with FITZ_LOCK:
-            doc = fitz.open(path)
+            doc = fitz.open(ruta_sistema(path))
             try:
                 for index, page in enumerate(doc):
                     if index >= max_paginas:
@@ -208,6 +244,26 @@ def extraer_pdf_ocr(
         return texto, "texto_ocr" if len(texto) > 40 else "necesita_ocr"
     except Exception as exc:
         return "", f"error_ocr: {exc}"
+
+
+def paginas_pdf_blancas(path, indices):
+    """Detecta solo paginas realmente blancas con una miniatura gris barata."""
+    if not indices:
+        return set()
+    blancas = set()
+    with FITZ_LOCK:
+        doc = fitz.open(ruta_sistema(path))
+        try:
+            for indice in indices:
+                if not 0 <= indice < len(doc):
+                    continue
+                pixmap = doc[indice].get_pixmap(matrix=fitz.Matrix(0.25, 0.25),
+                                                colorspace=fitz.csGRAY, alpha=False)
+                if all(pixel >= 250 for pixel in pixmap.samples):
+                    blancas.add(indice)
+        finally:
+            doc.close()
+    return blancas
 
 
 def tabla_estructurada(filas):
@@ -290,7 +346,7 @@ def extraer_pdf(path, max_paginas, usar_ocr=False, tesseract_cmd=None, idioma_oc
         paginas_sin_texto = []
         texto_paginas = {}
         paginas_vision = {}
-        with pdfplumber.open(path) as pdf:
+        with pdfplumber.open(ruta_sistema(path)) as pdf:
             for index, page in enumerate(pdf.pages):
                 if index >= max_paginas:
                     break
@@ -335,15 +391,25 @@ def extraer_pdf(path, max_paginas, usar_ocr=False, tesseract_cmd=None, idioma_oc
                 if len(texto_pagina) <= 40 and not tablas_validas:
                     paginas_sin_texto.append(index)
         texto = limpiar_control("\n".join(partes)).strip()
+        try:
+            paginas_vacias = paginas_pdf_blancas(path, paginas_sin_texto)
+        except Exception:
+            # La deteccion de blancos es una optimizacion, no debe borrar texto util.
+            paginas_vacias = set()
+        paginas_sin_texto = [indice for indice in paginas_sin_texto if indice not in paginas_vacias]
+        for indice in paginas_vacias:
+            paginas_vision.pop(indice, None)
     except Exception:
         texto = ""
         paginas_sin_texto = []
         texto_paginas = {}
         paginas_vision = {}
+        paginas_vacias = set()
 
     if detalle is not None:
         detalle["texto_paginas"] = texto_paginas
         detalle["paginas_vision"] = paginas_vision
+        detalle["paginas_vacias"] = sorted(paginas_vacias)
         if paginas_vision:
             # En modo vision no hace falta OCR ni respaldo: las paginas dificiles
             # se leen como imagen y el resto ya tiene texto estructurado.
@@ -373,7 +439,7 @@ def extraer_pdf(path, max_paginas, usar_ocr=False, tesseract_cmd=None, idioma_oc
     try:
         partes = []
         with FITZ_LOCK:
-            doc = fitz.open(path)
+            doc = fitz.open(ruta_sistema(path))
             try:
                 for index, page in enumerate(doc):
                     if index >= max_paginas:
@@ -394,7 +460,7 @@ def extraer_pdf(path, max_paginas, usar_ocr=False, tesseract_cmd=None, idioma_oc
 
 def extraer_docx(path):
     try:
-        doc = Document(path)
+        doc = Document(ruta_sistema(path))
         partes = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
         for numero_tabla, tabla in enumerate(doc.tables, 1):
             partes.append(f"[TABLA {numero_tabla}]")
@@ -411,7 +477,7 @@ def extraer_docx(path):
 def extraer_excel(path, max_filas, max_columnas):
     try:
         wb = load_workbook(
-            path,
+            ruta_sistema(path),
             data_only=True,
             read_only=True,
             keep_vba=path.suffix.lower() == ".xlsm"
@@ -437,7 +503,8 @@ def extraer_excel(path, max_filas, max_columnas):
 def extraer_texto_plano(path):
     for encoding in ("utf-8-sig", "latin-1"):
         try:
-            texto = limpiar_control(path.read_text(encoding=encoding)).strip()
+            with open(ruta_sistema(path), encoding=encoding) as archivo:
+                texto = limpiar_control(archivo.read()).strip()
             return texto, "texto" if len(texto) > 20 else "vacio"
         except Exception:
             pass
@@ -457,21 +524,24 @@ def encontrar_7zip(ruta_explicitada=None):
 def descomprimir(carpeta, seven_zip):
     registros = []
     raiz_extraidos = carpeta / "_extraidos"
-    archivos = list(carpeta.glob("*.zip")) + list(carpeta.glob("*.rar")) + list(carpeta.glob("*.7z"))
+    with os.scandir(ruta_sistema(carpeta)) as entradas:
+        archivos = [carpeta / entrada.name for entrada in entradas
+                    if entrada.is_file() and Path(entrada.name).suffix.lower() in {".zip", ".rar", ".7z"}]
+    archivos.sort(key=lambda archivo: archivo.name.lower())
     for archivo in archivos:
         destino = raiz_extraidos / re.sub(r"[^\w.-]", "_", archivo.stem)
         marcador = destino / ".extraido_ok"
-        if marcador.exists():
+        if os.path.isfile(ruta_sistema(marcador)):
             registros.append({"archivo": archivo.name, "estado": "ya_extraido"})
             continue
-        destino.mkdir(parents=True, exist_ok=True)
+        Path(ruta_sistema(destino)).mkdir(parents=True, exist_ok=True)
         try:
             if archivo.suffix.lower() == ".zip":
-                with zipfile.ZipFile(archivo) as compacto:
-                    compacto.extractall(destino)
+                with zipfile.ZipFile(ruta_sistema(archivo)) as compacto:
+                    compacto.extractall(ruta_sistema(destino))
             elif seven_zip:
                 proceso = subprocess.run(
-                    [seven_zip, "x", "-y", f"-o{destino}", str(archivo)],
+                    [seven_zip, "x", "-y", f"-o{ruta_sistema(destino)}", ruta_sistema(archivo)],
                     capture_output=True,
                     text=True,
                     timeout=300
@@ -480,7 +550,8 @@ def descomprimir(carpeta, seven_zip):
                     raise RuntimeError((proceso.stderr or proceso.stdout)[-500:])
             else:
                 raise RuntimeError("7-Zip no encontrado")
-            marcador.write_text("ok", encoding="utf-8")
+            with open(ruta_sistema(marcador), "w", encoding="utf-8") as registro:
+                registro.write("ok")
             registros.append({"archivo": archivo.name, "estado": "ok"})
         except Exception as exc:
             registros.append({"archivo": archivo.name, "estado": f"error: {exc}"})
@@ -514,7 +585,7 @@ def extraer_archivo(path, args, detalle=None):
 
 
 def tipo_documental(nombre):
-    texto = nombre.lower()
+    texto = unicodedata.normalize("NFKD", str(nombre)).encode("ascii", "ignore").decode("ascii").lower()
     if any(x in texto for x in ("econom", "cotiza", "presupuesto", "precio")):
         return "economico"
     if any(x in texto for x in ("tecnic", "ficha", "especific", "producto")):
@@ -744,6 +815,119 @@ def normalizar_numero(valor):
         return int(numero) if numero.is_integer() else numero
     except Exception:
         return None
+
+
+def filas_precio_economico(bloques):
+    """Precios de filas con cantidad, unitario y total comprobables en el anexo."""
+    filas = []
+    for bloque in bloques:
+        archivo = bloque.get("archivo") or ""
+        if tipo_documental(archivo) != "economico":
+            continue
+        for linea in bloque.get("texto", "").splitlines():
+            if not re.match(r"^FILA\s+\d+:", linea) or "||" not in linea:
+                continue
+            celdas = [celda.strip() for celda in linea.split("||")]
+            if len(celdas) < 4:
+                continue
+            unitario = normalizar_numero(celdas[-2])
+            total = normalizar_numero(celdas[-1])
+            if not all(isinstance(valor, (int, float)) and valor > 0 for valor in (unitario, total)):
+                continue
+            cantidad = round(total / unitario)
+            cantidades_visibles = [normalizar_numero(c) for c in celdas[:-2]]
+            if (cantidad <= 0 or cantidad not in cantidades_visibles
+                    or abs(cantidad * unitario - total) > max(2, total * 0.001)):
+                continue
+            descripcion = " ".join(c for c in celdas[:-2] if re.search(r"[A-Za-zÁÉÍÓÚáéíóú]", c))
+            if not descripcion:
+                continue
+            filas.append({"archivo": archivo, "pagina": bloque.get("pagina"),
+                          "descripcion": descripcion, "cantidad": cantidad,
+                          "precio_unitario": unitario, "precio_total": total})
+    return filas
+
+
+def reconciliar_precios_con_anexos(productos, bloques, total_oferta=None):
+    """Corrige solo filas economicas inequivocas; anula precios sin respaldo en ellas."""
+    filas = filas_precio_economico(bloques)
+    por_archivo = {}
+    for fila in filas:
+        por_archivo.setdefault(fila["archivo"], []).append(fila)
+    resultado = [dict(p) for p in productos]
+    asignaciones = {}
+    for fila in filas:
+        texto_fila = texto_normalizado(fila["descripcion"])
+        puntuaciones = []
+        for indice, producto in enumerate(resultado):
+            if producto.get("fuente_precio") != fila["archivo"]:
+                continue
+            cantidad = producto.get("cantidad")
+            if cantidad not in (None, "") and cantidad != fila["cantidad"]:
+                continue
+            tokens = {t for t in texto_normalizado(producto.get("producto")).split() if len(t) >= 4}
+            comunes = {t for t in tokens if t in texto_fila.split()}
+            modelo_base = re.sub(r"\s*\([^)]*\)", "", str(producto.get("modelo") or ""))
+            coincide_modelo = len(modelo_base) >= 5 and texto_normalizado(modelo_base) in texto_fila
+            if len(comunes) < 4 and not coincide_modelo:
+                continue
+            puntuacion = len(comunes) + (3 if coincide_modelo else 0)
+            puntuaciones.append((puntuacion, len(comunes), indice))
+        puntuaciones.sort(reverse=True)
+        if not puntuaciones or puntuaciones[0][0] < 3 or puntuaciones[0][1] < 2:
+            continue
+        if len(puntuaciones) > 1 and puntuaciones[0][0] <= puntuaciones[1][0] * 1.2:
+            continue
+        indice = puntuaciones[0][2]
+        asignaciones.setdefault(indice, []).append(fila)
+
+    # Un kit de una sola linea puede describirse genericamente en el economico:
+    # el modelo del PC solo aparece en el tecnico. Asociar solo si la identidad
+    # principal, la cantidad y el total general son univocos.
+    if len(filas) == 1 and not asignaciones:
+        fila = filas[0]
+        descripcion = texto_normalizado(fila["descripcion"])
+        referencia = normalizar_numero(total_oferta)
+        candidatos = [
+            indice for indice, producto in enumerate(resultado)
+            if producto.get("categoria") == "equipo"
+            and producto.get("fuente_precio") in (None, "", fila["archivo"])
+            and re.search(r"\b(?:desktop|computador|notebook|pc)\b", texto_normalizado(producto.get("producto")))
+            and (producto.get("cantidad") in (None, "", fila["cantidad"]))
+        ]
+        if (len(candidatos) == 1 and referencia is not None
+                and abs(referencia - fila["precio_total"]) <= 2
+                and re.search(r"\b(?:desktop|computador|notebook|pc)\b", descripcion)):
+            asignaciones[candidatos[0]] = [fila]
+
+    for indice, producto in enumerate(resultado):
+        archivo = producto.get("fuente_precio")
+        asociadas = asignaciones.get(indice) or []
+        if len(asociadas) == 1:
+            fila = asociadas[0]
+            producto["fuente_precio"] = fila["archivo"]
+            producto["cantidad"] = fila["cantidad"]
+            if not producto.get("cantidad_fuente"):
+                producto["cantidad_fuente"] = "anexo_economico"
+            producto["precio_unitario"] = fila["precio_unitario"]
+            producto["precio_total"] = fila["precio_total"]
+            producto["precio_total_tipo"] = "linea"
+            producto["pagina_precio"] = fila["pagina"]
+            producto["precio_reconciliado_fuente"] = True
+        elif archivo in por_archivo and (producto.get("precio_unitario") not in (None, "")
+                                       or producto.get("precio_total") not in (None, "")):
+            pares = {(f["precio_unitario"], f["precio_total"]) for f in por_archivo[archivo]}
+            par = (producto.get("precio_unitario"), producto.get("precio_total"))
+            asignada_a_otro = any(
+                f["precio_unitario"] == par[0] and f["precio_total"] == par[1]
+                for otro_indice, usadas in asignaciones.items() if otro_indice != indice for f in usadas
+            )
+            if par not in pares or asignada_a_otro:
+                producto["precio_unitario"] = None
+                producto["precio_total"] = None
+                producto["precio_total_tipo"] = None
+                producto["precio_fuente_no_coincide"] = True
+    return resultado
 
 
 def normalizar_producto(producto, proveedor, rut, archivo, tipo_doc):
@@ -1068,6 +1252,8 @@ def validar_productos(productos, parciales, total_oferta):
         total = producto.get("precio_total")
         if not producto.get("marca"):
             alertas.append("marca_no_identificada")
+        if producto.get("precio_fuente_no_coincide"):
+            alertas.append("precio_fuente_no_coincide")
         if cantidad in (None, ""):
             alertas.append("cantidad_no_identificada")
         elif float(cantidad) <= 0 or abs(float(cantidad) - round(float(cantidad))) > 0.001:
@@ -1202,7 +1388,7 @@ def renderizar_paginas_pdf(path, indices, dpi):
     imagenes = {}
     escala = dpi / 72
     with FITZ_LOCK:
-        doc = fitz.open(path)
+        doc = fitz.open(ruta_sistema(path))
         try:
             for index in indices:
                 if 0 <= index < len(doc):
@@ -1215,7 +1401,8 @@ def renderizar_paginas_pdf(path, indices, dpi):
 
 def cargar_imagen_archivo(path, lado_maximo=1600):
     """Carga un JPG/PNG/WEBP adjunto. Reduce fotos muy grandes para no gastar contexto."""
-    datos = path.read_bytes()
+    with open(ruta_sistema(path), "rb") as archivo:
+        datos = archivo.read()
     mime = EXTENSIONES_IMAGEN[path.suffix.lower()]
     if Image is not None:
         try:
@@ -1457,12 +1644,28 @@ def reemplazar_resultado(resultados, nuevo):
 
 
 def listar_archivos_oferta(carpeta):
-    return [
-        path for path in carpeta.rglob("*")
-        if path.is_file()
-        and path.name not in {"oferta.json", "extraccion_ia.json", ".extraido_ok"}
-        and "_debug_ia" not in path.parts
-    ]
+    """Enumera tambien archivos cuyo nombre completo supera los 260 caracteres."""
+    carpeta = Path(carpeta)
+    raiz_fisica = ruta_sistema(carpeta)
+    archivos = []
+    def error_en_recorrido(error):
+        raise error
+
+    for directorio, subdirectorios, nombres in os.walk(raiz_fisica, onerror=error_en_recorrido):
+        subdirectorios[:] = sorted(d for d in subdirectorios if d != "_debug_ia")
+        relativa = Path(os.path.relpath(directorio, raiz_fisica))
+        for nombre in sorted(nombres):
+            if nombre in {"oferta.json", "extraccion_ia.json", ".extraido_ok", "desktop.ini"}:
+                continue
+            path = carpeta / relativa / nombre
+            try:
+                if os.path.isfile(ruta_sistema(path)):
+                    archivos.append(path)
+                elif not os.path.exists(ruta_sistema(path)):
+                    raise OSError(f"Archivo encontrado pero no accesible: {path}")
+            except OSError as exc:
+                raise OSError(f"No se pudo enumerar {path}: {exc}") from exc
+    return archivos
 
 
 # ---------------------------------------------------------------------------
@@ -1636,6 +1839,8 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
             registro["caracteres"] = len(texto)
             texto_paginas = detalle.get("texto_paginas") or ({0: texto} if texto.strip() else {})
             paginas_vision = detalle.get("paginas_vision") or {}
+            if detalle.get("paginas_vacias"):
+                registro["paginas_vacias"] = [indice + 1 for indice in detalle["paginas_vacias"]]
             if paginas_vision and args.vision:
                 registro["paginas_vision"] = {str(i + 1): m for i, m in sorted(paginas_vision.items())}
             escaneadas = sorted(i for i, motivo in paginas_vision.items() if motivo == "sin_texto")
@@ -1646,8 +1851,10 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
                 sin_leer = list(escaneadas)
                 if escaneadas and args.ocr:
                     paginas_ocr = {}
-                    extraer_pdf_ocr(path, args.max_paginas, args.tesseract_cmd, args.idioma_ocr,
-                                    args.dpi_ocr, paginas=set(escaneadas), texto_paginas=paginas_ocr)
+                    _, estado_ocr = extraer_pdf_ocr(path, args.max_paginas, args.tesseract_cmd, args.idioma_ocr,
+                                                    args.dpi_ocr, paginas=set(escaneadas), texto_paginas=paginas_ocr)
+                    if estado_ocr.startswith("error_") or estado_ocr == "ocr_dependencia_no_disponible":
+                        registro["estado_ocr"] = estado_ocr
                     texto_paginas.update(paginas_ocr)
                     sin_leer = [indice for indice in escaneadas
                                 if len(paginas_ocr.get(indice, "").strip()) <= 40]
@@ -1748,7 +1955,7 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
 
     debug_dir = carpeta / "_debug_ia"
     if args.debug:
-        debug_dir.mkdir(exist_ok=True)
+        Path(ruta_sistema(debug_dir)).mkdir(exist_ok=True)
 
     parciales, estados, llamadas = [], [], 0
     segundos_modelo = 0.0
@@ -1787,8 +1994,8 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
             registro["consumo_local"]["llamadas"] = anterior.get("llamadas", 0) + nuevo["llamadas"]
             registro["llamada_proveedor"] = numero
         if args.debug:
-            (debug_dir / f"proveedor_{numero:02d}__prompt.txt").write_text(prompt, encoding="utf-8")
-            (debug_dir / f"proveedor_{numero:02d}__respuesta.txt").write_text(cruda, encoding="utf-8")
+            escribir_texto(debug_dir / f"proveedor_{numero:02d}__prompt.txt", prompt)
+            escribir_texto(debug_dir / f"proveedor_{numero:02d}__respuesta.txt", cruda)
         if isinstance(datos, dict):
             for producto in datos.get("productos", []):
                 if not isinstance(producto, dict):
@@ -1822,6 +2029,7 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
     else:
         productos, estado_consolidacion, consumo_consolidacion = relevantes, "omitida", {}
     productos = completar_marcas_desde_parciales(productos, parciales)
+    productos = reconciliar_precios_con_anexos(productos, bloques, total_oferta)
 
     return {
         "proveedor": proveedor,
@@ -1881,7 +2089,7 @@ def procesar_oferta(carpeta, args, seven_zip, previo=None, archivos_reprocesar=N
 
     debug_dir = carpeta / "_debug_ia"
     if args.debug:
-        debug_dir.mkdir(exist_ok=True)
+        Path(ruta_sistema(debug_dir)).mkdir(exist_ok=True)
 
     for indice, path in enumerate(sorted(archivos, key=prioridad), 1):
         verificar_detencion()
@@ -1939,8 +2147,8 @@ def procesar_oferta(carpeta, args, seven_zip, previo=None, archivos_reprocesar=N
             registro["fragmentos"] = consumo.get("llamadas", 1)
             if args.debug:
                 base = f"{indice:02d}__{re.sub(r'[^\w.-]', '_', path.stem)[:70]}"
-                (debug_dir / f"{base}__prompt.txt").write_text(prompt, encoding="utf-8")
-                (debug_dir / f"{base}__respuesta.txt").write_text(cruda, encoding="utf-8")
+                escribir_texto(debug_dir / f"{base}__prompt.txt", prompt)
+                escribir_texto(debug_dir / f"{base}__respuesta.txt", cruda)
         elif estado_lectura.startswith("texto") and texto and not args.solo_texto:
             productos, estado_ia, cruda, prompt, observaciones, consumo = extraer_parciales_archivo(
                 Path(relativo), texto, proveedor, rut, total_oferta, args
@@ -1953,8 +2161,8 @@ def procesar_oferta(carpeta, args, seven_zip, previo=None, archivos_reprocesar=N
             registro["fragmentos"] = consumo.get("llamadas", 1)
             if args.debug:
                 base = f"{indice:02d}__{re.sub(r'[^\w.-]', '_', path.stem)[:70]}"
-                (debug_dir / f"{base}__prompt.txt").write_text(prompt, encoding="utf-8")
-                (debug_dir / f"{base}__respuesta.txt").write_text(cruda, encoding="utf-8")
+                escribir_texto(debug_dir / f"{base}__prompt.txt", prompt)
+                escribir_texto(debug_dir / f"{base}__respuesta.txt", cruda)
         elif args.solo_texto and estado_lectura.startswith("texto"):
             registro["estado_ia"] = "solo_texto"
 
@@ -1968,8 +2176,8 @@ def procesar_oferta(carpeta, args, seven_zip, previo=None, archivos_reprocesar=N
             parciales, proveedor, rut, total_oferta, args
         )
         if args.debug and prompt_consolidacion:
-            (debug_dir / "99__consolidacion__prompt.txt").write_text(prompt_consolidacion, encoding="utf-8")
-            (debug_dir / "99__consolidacion__respuesta.txt").write_text(cruda_consolidacion, encoding="utf-8")
+            escribir_texto(debug_dir / "99__consolidacion__prompt.txt", prompt_consolidacion)
+            escribir_texto(debug_dir / "99__consolidacion__respuesta.txt", cruda_consolidacion)
 
     return {
         "proveedor": proveedor,
@@ -1999,8 +2207,8 @@ def diagnosticar_vision(licitaciones, args, ruta_csv):
     filas = []
     for licitacion in licitaciones:
         oferentes = sorted(
-            carpeta for carpeta in licitacion.iterdir()
-            if carpeta.is_dir() and not carpeta.name.startswith("_")
+            carpeta for carpeta in listar_subdirectorios(licitacion)
+            if not carpeta.name.startswith("_")
         )
         if args.proveedor:
             oferentes = [carpeta for carpeta in oferentes if carpeta.name == args.proveedor]
@@ -2033,9 +2241,9 @@ def diagnosticar_vision(licitaciones, args, ruta_csv):
                 print(f"  {licitacion.name} | {carpeta.name[:30]:30} | {fila['archivo'][:40]:40} | "
                       f"vision: {fila['paginas_vision'] or '-'} {('(' + fila['motivos'] + ')') if fila['motivos'] else ''}")
 
-    ruta_csv.parent.mkdir(parents=True, exist_ok=True)
+    Path(ruta_sistema(ruta_csv.parent)).mkdir(parents=True, exist_ok=True)
     campos = ["licitacion", "proveedor", "archivo", "tipo_documental", "paginas_leidas", "paginas_vision", "motivos"]
-    with ruta_csv.open("w", newline="", encoding="utf-8-sig") as archivo:
+    with open(ruta_sistema(ruta_csv), "w", newline="", encoding="utf-8-sig") as archivo:
         escritor = csv.DictWriter(archivo, fieldnames=campos)
         escritor.writeheader()
         escritor.writerows(filas)
@@ -2061,10 +2269,24 @@ def diagnosticar_vision(licitaciones, args, ruta_csv):
     print("=" * 74)
 
 
+def listar_subdirectorios(carpeta):
+    with os.scandir(ruta_sistema(carpeta)) as entradas:
+        nombres = sorted(entrada.name for entrada in entradas if entrada.is_dir(follow_symlinks=False))
+    return [Path(carpeta) / nombre for nombre in nombres]
+
+
 def detectar_licitaciones(raiz):
-    if any(hijo.is_dir() and (hijo / "oferta.json").exists() for hijo in raiz.iterdir()):
-        return [raiz]
-    return sorted((hijo for hijo in raiz.iterdir() if hijo.is_dir()), key=lambda path: path.name)
+    """Acepta una licitacion, un mes o un arbol de meses/años sin recorrer anexos."""
+    pendientes = [Path(raiz)]
+    encontradas = []
+    while pendientes:
+        carpeta = pendientes.pop()
+        hijos = listar_subdirectorios(carpeta)
+        if any(os.path.isfile(ruta_sistema(hijo / "oferta.json")) for hijo in hijos):
+            encontradas.append(carpeta)
+        else:
+            pendientes.extend(reversed([hijo for hijo in hijos if not hijo.name.startswith("_")]))
+    return sorted(encontradas, key=lambda path: str(path).lower())
 
 
 def escribir_log(ruta, evento, **datos):
@@ -2073,8 +2295,8 @@ def escribir_log(ruta, evento, **datos):
         "evento": evento,
         **datos,
     }
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    with LOG_LOCK, ruta.open("a", encoding="utf-8") as archivo:
+    Path(ruta_sistema(ruta.parent)).mkdir(parents=True, exist_ok=True)
+    with LOG_LOCK, open(ruta_sistema(ruta), "a", encoding="utf-8") as archivo:
         archivo.write(json.dumps(registro, ensure_ascii=False) + "\n")
 
 
@@ -2254,7 +2476,7 @@ def generar_excel(productos, consumos, resumenes, ruta):
 
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    wb.save(ruta)
+    wb.save(ruta_sistema(ruta))
 
 
 def main():
@@ -2329,13 +2551,13 @@ def main():
                         help="Maximo de tokens generados por llamada LM Studio")
     parser.add_argument("--proveedor",
                         help="Procesa solo el proveedor cuyo nombre coincide con la carpeta")
-    parser.add_argument("--metadata-csv", default=str(Path(__file__).resolve().with_name("para_scrapear.csv")),
-                        help="CSV con codigo, nombre y fecha_publicacion")
+    parser.add_argument("--metadata-csv",
+                        help="CSV opcional con codigo, nombre y fecha_publicacion; prevalece sobre el catalogo y los CSV mensuales")
     args = parser.parse_args()
     DEBUG = args.debug
 
     raiz = Path(args.dir)
-    if not raiz.exists():
+    if not os.path.isdir(ruta_sistema(raiz)):
         sys.exit(f"No existe: {raiz}")
 
     seven_zip = encontrar_7zip(args.seven_zip)
@@ -2344,7 +2566,7 @@ def main():
         if args.limite_licitaciones < 1:
             sys.exit("--limite-licitaciones debe ser mayor que cero")
         licitaciones = licitaciones[:args.limite_licitaciones]
-    metadata_licitaciones = cargar_metadata_licitaciones(args.metadata_csv)
+    metadata_licitaciones = cargar_metadata_para_corrida(licitaciones, args.metadata_csv)
     todos = []
     consumos = []
     resumenes = []
@@ -2388,8 +2610,8 @@ def main():
     tareas = []
     for licitacion in licitaciones:
         oferentes = [
-            carpeta for carpeta in licitacion.iterdir()
-            if carpeta.is_dir() and not carpeta.name.startswith("_")
+            carpeta for carpeta in listar_subdirectorios(licitacion)
+            if not carpeta.name.startswith("_")
         ]
         if args.proveedor:
             oferentes = [carpeta for carpeta in oferentes if carpeta.name == args.proveedor]
@@ -2403,9 +2625,10 @@ def main():
         salida = licitacion / "extraccion_ia.json"
         resultados = []
         previos_por_carpeta = {}
-        if salida.exists() and not args.rehacer:
+        if os.path.isfile(ruta_sistema(salida)) and not args.rehacer:
             try:
-                resultados = json.loads(salida.read_text(encoding="utf-8"))
+                with open(ruta_sistema(salida), encoding="utf-8") as archivo:
+                    resultados = json.load(archivo)
             except (json.JSONDecodeError, OSError):
                 resultados = []
             carpeta_por_rut = {

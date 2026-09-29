@@ -46,6 +46,9 @@ REGLAS:
   subtotal ni total general de la oferta a un producto. Usa precios netos cuando
   existan ambos y numeros sin simbolos ni separadores de miles.
 - No inventes: usa null si falta un dato o no puedes asociarlo con seguridad.
+- Los puntos en montos CLP son separadores de miles: 471.111 significa 471111,
+  no 471.111. Devuelve numeros JSON sin puntos de miles y verifica cantidad x
+  precio_unitario = precio_total de la misma fila.
 - Las filas con || conservan columnas. Si la tabla esta aplanada, reconstruyela
   con encabezados y contexto, sin mezclar valores de items distintos. Si faltan
   elementos para distinguir las columnas, deja el dato dudoso en null.
@@ -175,6 +178,10 @@ el fabricante del producto, no su familia/modelo ni la marca de CPU, disco o acc
 Cruza por item y modelo/especificaciones compatibles; nunca por precio o proveedor solamente.
 Devuelve precio unitario y total de la misma linea; calcula el unitario solo con cantidad y total
 de esa linea. Usa precios netos, nunca IVA ni total general. Usa null si falta un dato; no inventes.
+En CLP, 471.111 es 471111 y 37.688.880 es 37688880: devuelve enteros JSON sin
+separadores de miles. Comprueba cantidad x unitario = total de esa misma fila.
+Si una linea economica es un kit que incluye PC y monitor por un precio unico, no
+inventes precios separados para los componentes. Deja sus precios propios en null.
 Indica archivo y pagina del producto/marca y del precio. Devuelve [] si no hay productos del alcance.
 
 DOCUMENTOS:

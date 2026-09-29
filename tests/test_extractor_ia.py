@@ -1,7 +1,10 @@
 import importlib.util
 import json
+import os
+import shutil
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -14,6 +17,140 @@ SPEC.loader.exec_module(extractor)
 
 
 class ExtractorIATest(unittest.TestCase):
+    def test_tipo_documental_con_tildes(self):
+        self.assertEqual(extractor.tipo_documental("OFERTA_ECONÓMICA.pdf"), "economico")
+        self.assertEqual(extractor.tipo_documental("FICHA_TÉCNICA.pdf"), "tecnico")
+
+    def test_pagina_pdf_blanca_no_queda_pendiente_de_ocr(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            ruta = Path(temporal) / "oferta.pdf"
+            documento = extractor.fitz.open()
+            pagina = documento.new_page()
+            pagina.insert_text((72, 72), "Oferta de computadores: 80 unidades, precio neto 462490 pesos cada uno")
+            documento.new_page()
+            documento.save(extractor.ruta_sistema(ruta))
+            documento.close()
+            detalle = {}
+            texto, estado = extractor.extraer_pdf(ruta, 5, detalle=detalle)
+            self.assertEqual(estado, "texto")
+            self.assertIn("462490", texto)
+            self.assertEqual(detalle["paginas_vacias"], [1])
+            self.assertNotIn(1, detalle["paginas_vision"])
+
+    def test_pagina_pdf_con_imagen_no_se_confunde_con_blanca(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            ruta = Path(temporal) / "escaneada.pdf"
+            documento = extractor.fitz.open()
+            pagina = documento.new_page()
+            pagina.draw_line((72, 72), (180, 72), color=(0, 0, 0), width=2)
+            documento.save(extractor.ruta_sistema(ruta))
+            documento.close()
+            detalle = {}
+            extractor.extraer_pdf(ruta, 5, detalle=detalle)
+            self.assertEqual(detalle["paginas_vacias"], [])
+            self.assertEqual(detalle["paginas_vision"].get(0), "sin_texto")
+
+    @unittest.skipUnless(os.name == "nt", "Rutas largas de Windows")
+    def test_archivo_pdf_largo_se_enumera_y_lee(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            carpeta = Path(temporal) / "Proveedor"
+            largo = carpeta / "_extraidos" / ("anexo_economico_" + "a" * 55) / ("oferta_" + "b" * 65)
+            Path(extractor.ruta_sistema(largo)).mkdir(parents=True)
+            pdf = largo / ("FORMATO_OFERTA_ECONÓMICA_" + "c" * 45 + ".pdf")
+            self.assertGreater(len(str(pdf.resolve())), 260)
+            try:
+                documento = extractor.fitz.open()
+                pagina = documento.new_page()
+                pagina.insert_text((72, 72), "Desktop OzXen, 80 unidades, $462.490 por unidad, total $36.999.200")
+                documento.save(extractor.ruta_sistema(pdf))
+                documento.close()
+                archivos = extractor.listar_archivos_oferta(carpeta)
+                self.assertEqual(archivos, [pdf])
+                self.assertNotIn("\\\\?\\", str(archivos[0]))
+                texto, estado = extractor.extraer_pdf(pdf, 2)
+                self.assertEqual(estado, "texto")
+                self.assertIn("462.490", texto)
+            finally:
+                shutil.rmtree(extractor.ruta_sistema(carpeta / "_extraidos"))
+
+    @unittest.skipUnless(os.name == "nt", "Rutas largas de Windows")
+    def test_zip_con_ruta_larga_se_extrae_y_lee(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            carpeta = Path(temporal) / "Proveedor"
+            carpeta.mkdir()
+            ruta_interna = ("anexo_" + "a" * 75 + "/" + "oferta_" + "b" * 75 +
+                            "/economico_oferta.txt")
+            with zipfile.ZipFile(carpeta / "economico.zip", "w") as compacto:
+                compacto.writestr(ruta_interna, "Desktop OzXen 80 unidades $462.490 por unidad y $36.999.200 total")
+            try:
+                registros = extractor.descomprimir(carpeta, None)
+                self.assertEqual(registros[0]["estado"], "ok")
+                archivos = extractor.listar_archivos_oferta(carpeta)
+                extraido = next(p for p in archivos if p.name == "economico_oferta.txt")
+                self.assertGreater(len(str(extraido.resolve())), 260)
+                texto, estado = extractor.extraer_texto_plano(extraido)
+                self.assertEqual(estado, "texto")
+                self.assertIn("462.490", texto)
+            finally:
+                shutil.rmtree(extractor.ruta_sistema(carpeta / "_extraidos"))
+
+    def test_kit_unico_sin_fuente_precio_se_completa_con_anexo_verificado(self):
+        bloques = [{"archivo": "economico.pdf", "pagina": 1,
+                    "texto": "FILA 10: 1 || 80 || DESKTOP+MONITOR+KIT DE TECLADO || "
+                             "80 || $462.490 || $ 36.999.200"}]
+        pc = {"producto": "Desktop Tower OzXen A822-SX61V-121F-P0851", "categoria": "equipo",
+              "cantidad": None, "precio_unitario": None, "precio_total": None, "fuente_precio": None}
+        resultado = extractor.reconciliar_precios_con_anexos([pc], bloques, "$ 36.999.200")[0]
+        self.assertEqual((resultado["cantidad"], resultado["precio_unitario"], resultado["precio_total"]),
+                         (80, 462490, 36999200))
+        self.assertEqual(resultado["fuente_precio"], "economico.pdf")
+        con_fuente = extractor.reconciliar_precios_con_anexos(
+            [{**pc, "fuente_precio": "economico.pdf"}], bloques, "$ 36.999.200")[0]
+        self.assertEqual(con_fuente["precio_unitario"], 462490)
+
+    def test_kit_ambiguo_no_se_asigna_por_proveedor(self):
+        bloques = [{"archivo": "economico.pdf", "pagina": 1,
+                    "texto": "FILA 10: 1 || 80 || DESKTOP+MONITOR+KIT || 80 || $462.490 || $ 36.999.200"}]
+        pcs = [{"producto": f"Desktop OzXen {modelo}", "categoria": "equipo", "cantidad": None,
+                "precio_unitario": None, "precio_total": None, "fuente_precio": None}
+               for modelo in ("A822", "B900")]
+        resultado = extractor.reconciliar_precios_con_anexos(pcs, bloques, "$ 36.999.200")
+        self.assertTrue(all(p["precio_unitario"] is None for p in resultado))
+        equivocado = extractor.reconciliar_precios_con_anexos(pcs[:1], bloques, "$ 40.000.000")
+        self.assertIsNone(equivocado[0]["precio_unitario"])
+
+    def test_descubre_licitaciones_en_una_carpeta_o_varios_meses(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            raiz = Path(temporal)
+            licitaciones = [
+                raiz / "2025-11" / "ofertas" / "1145-63-LE25",
+                raiz / "2025-12" / "ofertas" / "1145-70-LE25",
+            ]
+            for licitacion in licitaciones:
+                proveedor = licitacion / "12345678-9__Proveedor"
+                proveedor.mkdir(parents=True)
+                (proveedor / "oferta.json").write_text("{}", encoding="utf-8")
+                (proveedor / "_extraidos").mkdir()
+            self.assertEqual(extractor.detectar_licitaciones(licitaciones[0]), licitaciones[:1])
+            self.assertEqual(extractor.detectar_licitaciones(raiz / "2025-11"), licitaciones[:1])
+            self.assertEqual(extractor.detectar_licitaciones(raiz), licitaciones)
+
+    def test_metadata_de_meses_y_csv_explicito(self):
+        with tempfile.TemporaryDirectory() as temporal:
+            raiz = Path(temporal)
+            licitacion = raiz / "2030-01" / "ofertas" / "9999-1-LE30"
+            licitacion.mkdir(parents=True)
+            csv_mes = licitacion.parent.parent / "para_scrapear.csv"
+            csv_mes.write_text("codigo,nombre,fecha_publicacion\n"
+                               "9999-1-LE30,Oferta de enero,03/01/2030 10:00:00\n", encoding="utf-8")
+            metadata = extractor.cargar_metadata_para_corrida([licitacion])
+            self.assertEqual(metadata["9999-1-LE30"]["fecha_publicacion"], "03/01/2030 10:00:00")
+            csv_usuario = raiz / "metadata_personalizada.csv"
+            csv_usuario.write_text("codigo,nombre,fecha_publicacion\n"
+                                   "9999-1-LE30,Oferta corregida,04/01/2030\n", encoding="utf-8")
+            metadata = extractor.cargar_metadata_para_corrida([licitacion], csv_usuario)
+            self.assertEqual(metadata["9999-1-LE30"]["fecha_publicacion"], "04/01/2030")
+
     def test_alcance_comercial(self):
         casos = {
             "Notebook HP con mouse incluido": "equipo",
@@ -36,6 +173,58 @@ class ExtractorIATest(unittest.TestCase):
         self.assertEqual(extractor.normalizar_numero("$ 18.527.280"), 18527280)
         self.assertEqual(extractor.normalizar_numero("$617,576"), 617576)
         self.assertEqual(extractor.normalizar_numero("123,50"), 123.5)
+
+    def test_reconcilia_precio_chileno_desde_fila_economica(self):
+        bloques = [{"archivo": "economico.docx", "pagina": None,
+                    "texto": "FILA 8: 1 || 80 || Computador Lenovo ThinkCentre M80s Gen3 "
+                             "|| 80 || 471.111 || 37.688.880"}]
+        producto = {"producto": "Computador Lenovo ThinkCentre M80s Gen3", "modelo": "ThinkCentre M80s Gen3",
+                    "categoria": "equipo", "cantidad": 80, "precio_unitario": 471.111,
+                    "precio_total": 37688.88, "fuente_precio": "economico.docx"}
+        corregido = extractor.reconciliar_precios_con_anexos([producto], bloques)[0]
+        self.assertEqual(corregido["precio_unitario"], 471111)
+        self.assertEqual(corregido["precio_total"], 37688880)
+        self.assertTrue(corregido["precio_reconciliado_fuente"])
+
+    def test_kit_una_fila_no_recibe_dos_precios_inventados(self):
+        bloques = [{"archivo": "economico.pdf", "pagina": 1,
+                    "texto": "FILA 10: 1 || 80 || Lenovo ThinkCentre M75s Gen 2 SFF "
+                             "AMD Ryzen 5 PRO 3350G / 8GB RAM / 512 SSD / Win11 Pro "
+                             "+ Monitor ThinkVision E24-40 || 80 || 555.028 || 44.402.240"}]
+        pc = {"producto": "Lenovo ThinkCentre M75s Gen 2 SFF AMD Ryzen 5 PRO 3350G / "
+                          "8GB RAM / 512 SSD / Win11 Pro", "modelo": "ThinkCentre M75s Gen 2",
+              "categoria": "equipo", "cantidad": 80, "precio_unitario": 692.53,
+              "precio_total": 55402.4, "fuente_precio": "economico.pdf"}
+        monitor = {"producto": "Lenovo ThinkVision E24-40 Monitor 23.8", "modelo": "ThinkVision E24-40",
+                   "categoria": "monitor", "cantidad": 80, "precio_unitario": 59,
+                   "precio_total": 4720, "fuente_precio": "economico.pdf"}
+        corregidos = extractor.reconciliar_precios_con_anexos([pc, monitor], bloques)
+        self.assertEqual((corregidos[0]["precio_unitario"], corregidos[0]["precio_total"]),
+                         (555028, 44402240))
+        self.assertIsNone(corregidos[1]["precio_unitario"])
+        self.assertIsNone(corregidos[1]["precio_total"])
+        self.assertTrue(corregidos[1]["precio_fuente_no_coincide"])
+
+    def test_no_corrige_precio_si_fila_no_es_verificable(self):
+        bloques = [{"archivo": "economico.pdf", "pagina": 1,
+                    "texto": "FILA 3: Notebook HP || 2 || 100.000 || 999.999"}]
+        producto = {"producto": "Notebook HP", "categoria": "equipo", "cantidad": 2,
+                    "precio_unitario": 100000, "precio_total": 200000, "fuente_precio": "economico.pdf"}
+        corregido = extractor.reconciliar_precios_con_anexos([producto], bloques)[0]
+        self.assertEqual(corregido["precio_total"], 200000)
+        self.assertNotIn("precio_reconciliado_fuente", corregido)
+
+    def test_no_asigna_precio_por_coincidencia_generica(self):
+        bloques = [{"archivo": "economico.pdf", "pagina": 1,
+                    "texto": "FILA 3: 1 || 2 || Notebook HP EliteBook 840 G10 || "
+                             "100.000 || 200.000"}]
+        producto = {"producto": "Notebook Dell Latitude 5440", "modelo": "Latitude 5440",
+                    "categoria": "equipo", "cantidad": 2, "precio_unitario": 100,
+                    "precio_total": 200, "fuente_precio": "economico.pdf"}
+        corregido = extractor.reconciliar_precios_con_anexos([producto], bloques)[0]
+        self.assertIsNone(corregido["precio_unitario"])
+        self.assertIsNone(corregido["precio_total"])
+        self.assertTrue(corregido["precio_fuente_no_coincide"])
 
     def test_deriva_unitario_y_cantidad_solo_con_evidencia(self):
         desde_total = extractor.normalizar_producto(
