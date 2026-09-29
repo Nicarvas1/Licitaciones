@@ -84,12 +84,37 @@ def leer_pdf(ruta, max_paginas):
     with pdfplumber.open(ruta) as pdf:
         for indice, pagina in enumerate(pdf.pages[:max_paginas], 1):
             partes.append(f"[PÁGINA {indice}]")
-            texto = pagina.extract_text(layout=True) or pagina.extract_text() or ""
+            try:
+                tablas = pagina.find_tables()
+            except Exception:
+                tablas = []
+            # Evita enviar dos veces las mismas filas: una como texto plano y otra
+            # como tabla. Esta duplicación es una causa frecuente de productos repetidos.
+            if tablas:
+                cajas = [tabla.bbox for tabla in tablas]
+
+                def fuera_de_tablas(objeto):
+                    x0 = objeto.get("x0")
+                    x1 = objeto.get("x1")
+                    top = objeto.get("top")
+                    bottom = objeto.get("bottom")
+                    if None in (x0, x1, top, bottom):
+                        return True
+                    return not any(
+                        x0 >= caja[0] and x1 <= caja[2] and top >= caja[1] and bottom <= caja[3]
+                        for caja in cajas
+                    )
+
+                texto = pagina.filter(fuera_de_tablas).extract_text(layout=True) or ""
+            else:
+                texto = pagina.extract_text(layout=True) or pagina.extract_text() or ""
             if texto.strip():
                 partes.append(limpiar(texto).strip())
-            for numero, tabla in enumerate(pagina.extract_tables() or [], 1):
+            for numero, tabla_objeto in enumerate(tablas, 1):
                 partes.append(f"[TABLA {numero} - PÁGINA {indice}]")
-                for fila_numero, fila in enumerate(tabla or [], 1):
+                for fila_numero, fila in enumerate(tabla_objeto.extract() or [], 1):
+                    if not fila:
+                        continue
                     valores = [limpiar(celda).replace("\n", " ").strip() for celda in fila]
                     if any(valores):
                         partes.append(f"FILA {fila_numero}: " + " || ".join(valores))
