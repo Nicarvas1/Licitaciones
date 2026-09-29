@@ -170,6 +170,7 @@ def extraer_pdf_ocr(
     idioma="spa+eng",
     dpi=180,
     paginas=None,
+    texto_paginas=None,
 ):
     if pytesseract is None or Image is None:
         return "", "ocr_dependencia_no_disponible"
@@ -199,7 +200,10 @@ def extraer_pdf_ocr(
                 except pytesseract.TesseractError:
                     texto = pytesseract.image_to_string(imagen, lang="eng")
             if texto.strip():
-                partes.append(f"[PAGINA {index + 1} - OCR]\n{texto.strip()}")
+                pagina_ocr = limpiar_control(f"[PAGINA {index + 1} - OCR]\n{texto.strip()}")
+                partes.append(pagina_ocr)
+                if texto_paginas is not None:
+                    texto_paginas[index] = pagina_ocr
         texto = limpiar_control("\n\n".join(partes)).strip()
         return texto, "texto_ocr" if len(texto) > 40 else "necesita_ocr"
     except Exception as exc:
@@ -1083,7 +1087,7 @@ def validar_productos(productos, parciales, total_oferta):
 def extraer_parciales_archivo(path, texto, proveedor, rut, total_oferta, args):
     relativo = str(path)
     tipo_doc = tipo_documental(path.name)
-    fragmentos = dividir_texto(texto, args.max_chars_archivo)
+    fragmentos = dividir_texto(compactar_texto(texto), args.max_chars_archivo)
     productos = []
     estados = []
     respuestas = []
@@ -1512,14 +1516,36 @@ def pagina_relevante(texto):
     return bool(PATRON_PALABRA_PRODUCTO.search(texto) and PATRON_MARCA_PAGINA.search(texto))
 
 
-def lineas_relevantes(texto, limite):
-    """Para planillas y documentos largos sin paginas: conserva encabezados y lineas
-    con montos o equipos hasta el limite de caracteres."""
-    if len(texto) <= limite:
-        return texto
-    lineas = texto.splitlines()
-    elegidas = [l for i, l in enumerate(lineas) if i < 15 or PATRON_MONTO.search(l) or PATRON_PALABRA_PRODUCTO.search(l)]
-    return "\n".join(elegidas)[:limite]
+def dividir_bloque_proveedor(bloque, limite):
+    """Divide texto largo por lineas, conservando filas y encabezados de tablas.
+
+    Una imagen se mantiene con su pagina completa. Una fila individual que supera
+    el limite se mantiene entera: el limite es un objetivo, nunca un recorte.
+    """
+    if bloque.get("imagen") or len(bloque["texto"]) <= limite:
+        return [bloque]
+    partes, actual, encabezados = [], [], []
+    largo = 0
+    for linea in bloque["texto"].splitlines():
+        if actual and largo + len(linea) + 1 > limite:
+            partes.append({**bloque, "texto": "\n".join(actual)})
+            actual = list(encabezados)
+            largo = sum(len(valor) + 1 for valor in actual)
+        actual.append(linea)
+        largo += len(linea) + 1
+        if linea.startswith(("[HOJA ", "[PAGINA ")):
+            encabezados = [linea]
+        elif linea.startswith("[TABLA "):
+            encabezados = [valor for valor in encabezados if not valor.startswith(("[TABLA ", "FILA "))]
+            encabezados.append(linea)
+        elif linea.startswith("FILA 1:"):
+            encabezados = [valor for valor in encabezados if not valor.startswith("FILA ")]
+            # Repite solo encabezados razonablemente cortos para no duplicar una fila gigante.
+            if len(linea) < min(1000, limite // 4):
+                encabezados.append(linea)
+    if actual:
+        partes.append({**bloque, "texto": "\n".join(actual)})
+    return partes
 
 
 def preparar_bloques_proveedor(carpeta, archivos, args):
@@ -1528,7 +1554,6 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
     bloques, registros, necesita_ocr, no_soportados = [], [], [], []
     descartados = []  # paginas con texto que el filtro no envio (respaldo)
     marcas = set()
-    limite_archivo = max(4000, args.max_chars_proveedor // 2)
     for path in sorted(archivos, key=prioridad):
         verificar_detencion()
         relativo = str(path.relative_to(carpeta))
@@ -1563,13 +1588,12 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
             else:
                 sin_leer = list(escaneadas)
                 if escaneadas and args.ocr:
-                    sin_leer = []
-                    for indice in escaneadas:
-                        texto_ocr, _ = extraer_pdf_ocr(path, args.max_paginas, args.tesseract_cmd, args.idioma_ocr,
-                                                       args.dpi_ocr, paginas={indice})
-                        texto_paginas[indice] = texto_ocr
-                        if len(texto_ocr.strip()) <= 40:
-                            sin_leer.append(indice)  # el OCR no pudo leer la pagina
+                    paginas_ocr = {}
+                    extraer_pdf_ocr(path, args.max_paginas, args.tesseract_cmd, args.idioma_ocr,
+                                    args.dpi_ocr, paginas=set(escaneadas), texto_paginas=paginas_ocr)
+                    texto_paginas.update(paginas_ocr)
+                    sin_leer = [indice for indice in escaneadas
+                                if len(paginas_ocr.get(indice, "").strip()) <= 40]
                 if sin_leer and args.vision:
                     imagenes = renderizar_paginas_pdf(path, sin_leer, args.dpi_vision)
                     registro["paginas_vision"] = {str(i + 1): "sin_texto" for i in sin_leer}
@@ -1577,11 +1601,9 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
                     necesita_ocr.append(relativo)
             for indice in sorted(set(texto_paginas) | set(imagenes)):
                 texto_pagina = texto_paginas.get(indice, "")
-                for marca in MARCAS:
-                    if re.search(rf"\b{re.escape(marca)}\b", texto_pagina, re.I):
-                        marcas.add(marca)
+                marcas.update(coincidencia.group(0) for coincidencia in PATRON_MARCA_PAGINA.finditer(texto_pagina))
                 bloque = {"archivo": relativo, "pagina": indice + 1,
-                          "texto": compactar_texto(texto_pagina)[:args.max_chars_proveedor],
+                          "texto": compactar_texto(texto_pagina),
                           "imagen": imagenes.get(indice)}
                 if indice in imagenes or pagina_relevante(texto_pagina):
                     bloques.append(bloque)
@@ -1596,12 +1618,10 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
         if estado in ("no_soportado", "xls_legacy_no_soportado"):
             no_soportados.append(relativo)
             continue
-        for marca in MARCAS:
-            if re.search(rf"\b{re.escape(marca)}\b", texto, re.I):
-                marcas.add(marca)
+        marcas.update(coincidencia.group(0) for coincidencia in PATRON_MARCA_PAGINA.finditer(texto))
         if texto.strip():
             bloque = {"archivo": relativo, "pagina": None,
-                      "texto": lineas_relevantes(compactar_texto(texto), limite_archivo), "imagen": None}
+                      "texto": compactar_texto(texto), "imagen": None}
             if PATRON_MONTO.search(texto) or PATRON_PALABRA_PRODUCTO.search(texto):
                 bloques.append(bloque)
                 registro["paginas_enviadas"] = ["todo"]
@@ -1609,15 +1629,12 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
                 descartados.append(bloque)
 
     if not bloques and descartados:
-        # El filtro descarto todo: en vez de saltar al proveedor, se envian sus anexos
-        # (economicos primero, ya vienen ordenados) hasta el limite de una llamada.
-        usados = 0
+        # Si el filtro descarto todo, revisar todos los bloques disponibles.
+        # agrupar_bloques los reparte en llamadas sin perder el final del documento.
+        por_archivo = {registro["archivo"]: registro for registro in registros}
         for bloque in descartados:
-            if usados + len(bloque["texto"]) > args.max_chars_proveedor:
-                break
             bloques.append(bloque)
-            usados += len(bloque["texto"])
-            registro = next(r for r in registros if r["archivo"] == bloque["archivo"])
+            registro = por_archivo[bloque["archivo"]]
             registro["paginas_enviadas"].append(bloque["pagina"] or "todo")
             registro["respaldo_sin_filtro"] = True
     return bloques, registros, necesita_ocr, no_soportados, marcas
@@ -1627,6 +1644,8 @@ def agrupar_bloques(bloques, max_chars, max_imagenes):
     """Reparte los bloques en llamadas respetando el limite de texto y de imagenes.
     Casi todos los proveedores caben en una sola llamada."""
     grupos, actual, chars, imagenes = [], [], 0, 0
+    bloques = [parte for bloque in bloques
+               for parte in dividir_bloque_proveedor(bloque, max(1, max_chars - 80))]
     for bloque in bloques:
         largo = len(bloque["texto"]) + 80
         con_imagen = 1 if bloque.get("imagen") else 0
@@ -1664,8 +1683,10 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
     rut = info.get("rut") or carpeta.name.split("__", 1)[0]
     total_oferta = info.get("total") or info.get("total_oferta") or ""
     archivos_comprimidos = descomprimir(carpeta, seven_zip)
+    inicio_lectura = time.perf_counter()
     bloques, registros, necesita_ocr, no_soportados, marcas = preparar_bloques_proveedor(
         carpeta, listar_archivos_oferta(carpeta), args)
+    segundos_lectura = time.perf_counter() - inicio_lectura
     por_archivo = {registro["archivo"]: registro for registro in registros}
 
     debug_dir = carpeta / "_debug_ia"
@@ -1673,7 +1694,10 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
         debug_dir.mkdir(exist_ok=True)
 
     parciales, estados, llamadas = [], [], 0
+    segundos_modelo = 0.0
     grupos = [] if args.solo_texto else agrupar_bloques(bloques, args.max_chars_proveedor, args.max_imagenes_proveedor)
+    print(f"  {proveedor[:34]}: lectura={segundos_lectura:.1f}s | "
+          f"bloques relevantes={len(bloques)} | llamadas de extraccion={len(grupos)}", flush=True)
     for numero, grupo in enumerate(grupos, 1):
         verificar_detencion()
         partes, imagenes, lista_imagenes = [], [], []
@@ -1688,9 +1712,11 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
         nota = NOTA_IMAGENES_PROVEEDOR.format(lista_imagenes="\n".join(lista_imagenes)) if imagenes else ""
         prompt = PROMPT_PROVEEDOR.format(proveedor=proveedor, total_oferta=total_oferta or "no informado",
                                          nota_imagenes=nota, documentos="\n\n".join(partes))
+        inicio_modelo = time.perf_counter()
         datos, estado, cruda, consumo = consultar_modelo(
             prompt, args.modelo, args.timeout, args.num_ctx, args.backend, args.max_tokens,
             args.reintentos_modelo, args.espera_reintento, imagenes=imagenes or None)
+        segundos_modelo += time.perf_counter() - inicio_modelo
         llamadas += 1
         estados.append(estado)
         archivos_llamada = list(dict.fromkeys(bloque["archivo"] for bloque in grupo))
@@ -1698,7 +1724,10 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
         for indice, relativo in enumerate(archivos_llamada):
             registro = por_archivo[relativo]
             registro["estado_ia"] = estado if registro["estado_ia"] in ("no_ejecutada", *ESTADOS_IA_OK) else registro["estado_ia"]
-            registro["consumo_local"] = {**consumo, "llamadas": 1} if indice == 0 else {"llamadas": 0}
+            anterior = registro.get("consumo_local") or {"llamadas": 0}
+            nuevo = {**consumo, "llamadas": 1} if indice == 0 else {"llamadas": 0}
+            registro["consumo_local"] = combinar_consumos([anterior, nuevo], args.modelo)
+            registro["consumo_local"]["llamadas"] = anterior.get("llamadas", 0) + nuevo["llamadas"]
             registro["llamada_proveedor"] = numero
         if args.debug:
             (debug_dir / f"proveedor_{numero:02d}__prompt.txt").write_text(prompt, encoding="utf-8")
@@ -1728,9 +1757,11 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
 
     relevantes = filtrar_productos_relevantes(parciales)
     if len(grupos) > 1 and not args.sin_consolidar and parciales:
+        inicio_modelo = time.perf_counter()
         productos, estado_consolidacion, _, _, consumo_consolidacion = consolidar_parciales(
             parciales, proveedor, rut, total_oferta, args)
-        llamadas += 1
+        segundos_modelo += time.perf_counter() - inicio_modelo
+        llamadas += consumo_consolidacion.get("llamadas", 0)
     else:
         productos, estado_consolidacion, consumo_consolidacion = relevantes, "omitida", {}
 
@@ -1754,6 +1785,8 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
         "marcas_detectadas_texto": sorted(marcas),
         "llamadas_modelo": llamadas,
         "segundos": round(time.perf_counter() - inicio, 1),
+        "segundos_lectura": round(segundos_lectura, 1),
+        "segundos_modelo": round(segundos_modelo, 1),
     }
 
 
@@ -2495,6 +2528,8 @@ def main():
             errores_modelo=resumen_actual["errores_modelo"],
             ocr=resumen_actual["ocr"],
             segundos=resultado.get("segundos"),
+            segundos_lectura=resultado.get("segundos_lectura"),
+            segundos_modelo=resultado.get("segundos_modelo"),
             llamadas=resultado.get("llamadas_modelo"),
             modo=resultado.get("modo"),
         )
@@ -2506,6 +2541,9 @@ def main():
             f"ocr={len(resultado['necesita_ocr']):2} "
             f"consol={resultado['estado_consolidacion']}"
         )
+        if resultado.get("segundos_modelo") is not None:
+            print(f"      lectura={resultado['segundos_lectura']}s | modelo={resultado['segundos_modelo']}s | "
+                  f"llamadas={resultado['llamadas_modelo']}")
         reproceso = resultado.get("reproceso") or {}
         if reproceso.get("modo") == "nada":
             print("      sin cambios: no habia archivos que rehacer")

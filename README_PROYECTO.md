@@ -407,14 +407,14 @@ Con `--por-proveedor`:
   paginas con montos, o con un equipo junto a una marca; declaraciones, bases y
   formularios administrativos quedan fuera;
 - si el filtro descarta TODAS las paginas de un proveedor, igual se envian sus
-  anexos (economicos primero) hasta el limite de una llamada, marcados con
+  anexos (economicos primero), repartidos en llamadas si es necesario, marcados con
   `respaldo_sin_filtro`: el filtro ahorra tiempo pero no deja proveedores sin revisar;
 - todo va en UNA llamada (anexos economicos primero). Si no cabe en
   `--max-chars-proveedor` (24.000 caracteres por defecto) se usan mas llamadas y
   solo entonces se consolida;
 - el modelo cruza economico y tecnico en la misma respuesta, asi que desaparece
   la llamada de consolidacion;
-- la respuesta es corta: 9 campos por producto en vez de 15;
+- la respuesta es corta e incluye las fuentes de producto y precio por separado;
 - paginas escaneadas: como imagen con `--vision` (maximo
   `--max-imagenes-proveedor` por llamada) o por OCR solo esa pagina con `--ocr`.
 
@@ -430,6 +430,50 @@ para comparar modos conviene usar una copia del lote.
 ```
 
 No usar `--pausa-licitacion` ni `--pausa-archivo` en la Z8.
+
+### Prueba del extractor optimizado en la Z4
+
+Se conserva `3_extraer_ia.py`, sus checkpoints y el Excel simplificado de una
+hoja con nueve columnas. Los prompts por archivo y por proveedor piden reconstruir
+tablas desordenadas o sin tabulaciones, sin mezclar datos de items distintos.
+El prompt por archivo se acorto y se compacta el relleno de espacios antes de
+dividir el texto para evitar fragmentos innecesarios.
+
+En `--por-proveedor`, el filtro de paginas sigue activo: se envian paginas con
+montos o equipos y marcas, y se usa el respaldo anterior si el filtro descarta
+todo. Los textos largos ya no se recortan antes de agruparlos: se reparten por
+lineas, manteniendo filas completas y encabezados de tablas/hojas. Esto puede
+producir mas llamadas que una corrida anterior que perdia el final del documento.
+Las paginas escaneadas se preparan para OCR abriendo el PDF una vez por archivo.
+
+Para una prueba en una licitacion copiada, con el identificador exacto del Qwen
+9B cargado en LM Studio:
+
+```powershell
+.\.venv\Scripts\python.exe .\3_extraer_ia.py `
+  --dir ".\copia_prueba\ofertas\1057062-13-LE25" `
+  --backend lmstudio --modelo "IDENTIFICADOR-DEL-MODELO" `
+  --por-proveedor --paralelo 1 --rampa 0 `
+  --max-chars-proveedor 24000 --max-tokens 4096 --timeout 600 `
+  --excel ".\prueba_z4_optimizada.xlsx" --debug
+```
+
+Si una tabla no se puede leer bien como texto, agregar `--vision` con un modelo
+que acepte imagenes. El modelo recibe una llamada de extraccion por proveedor
+si el texto y las imagenes caben en los limites; de lo contrario se usan varias
+llamadas y luego consolidacion. `--sin-consolidar` omite esta ultima, pero puede
+dejar productos incompletos cuando sus datos estan en grupos diferentes.
+
+La consola, el checkpoint y el log muestran `segundos_lectura`,
+`segundos_modelo` y el numero de llamadas. El consumo se acumula correctamente
+cuando un archivo participa en varias llamadas. `--max-chars-proveedor` es un
+objetivo en caracteres para agrupar texto, no configura el contexto en tokens
+de LM Studio; una fila individual o pagina con imagen puede superar ese objetivo
+para conservar su contenido completo.
+
+Cambiar el prompt no invalida automaticamente checkpoints. Para evaluar un
+proveedor que ya tiene resultado, usar `--rehacer` sobre una copia de su
+licitacion. Repetir sin `--rehacer` permite reanudar y reutilizar resultados.
 
 ### Vision solo para lo que el OCR no pudo leer (`--vision-solo-escaneadas`)
 

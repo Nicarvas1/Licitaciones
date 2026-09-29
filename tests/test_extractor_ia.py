@@ -3,6 +3,8 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -254,6 +256,119 @@ class ExtractorIATest(unittest.TestCase):
         self.assertIn("Reconstruye cada fila", prompt)
         self.assertIn("archivo_precio", prompt)
         self.assertIn("tabla de prueba", prompt)
+
+    def test_agrupacion_conserva_ultima_fila_y_encabezados_de_excel_largo(self):
+        encabezado = "FILA 1: Producto || Cantidad || Unitario || Total"
+        filas = [f"FILA {i}: Notebook HP {i} || 2 || 100 || 200" for i in range(2, 402)]
+        bloque = {
+            "archivo": "economico.xlsx", "pagina": None, "imagen": None,
+            "texto": "\n".join(["[HOJA Oferta]", encabezado, *filas]),
+        }
+        grupos = extractor.agrupar_bloques([bloque], 1500, 4)
+        self.assertGreater(len(grupos), 1)
+        textos = [parte["texto"] for grupo in grupos for parte in grupo]
+        combinado = "\n".join(textos)
+        for fila in filas:
+            self.assertEqual(combinado.count(fila + "\n") + int(combinado.endswith(fila)), 1)
+        self.assertTrue(all(encabezado in texto for texto in textos))
+        self.assertTrue(all("[HOJA Oferta]" in texto for texto in textos))
+
+    def test_no_corta_una_fila_individual_mayor_que_el_limite(self):
+        fila = "FILA 2: Notebook HP " + "x" * 2000
+        bloque = {"archivo": "oferta.pdf", "pagina": 1, "imagen": None, "texto": fila}
+        grupos = extractor.agrupar_bloques([bloque], 500, 4)
+        self.assertEqual(grupos[0][0]["texto"], fila)
+
+    def test_ocr_por_proveedor_abre_un_lote_y_conserva_paginas(self):
+        args = SimpleNamespace(max_chars_proveedor=24000, vision=False, vision_solo_escaneadas=False,
+                               ocr=True, max_paginas=20, tesseract_cmd=None, idioma_ocr="spa+eng",
+                               dpi_ocr=180)
+        def lectura(path, args, detalle):
+            detalle.update(texto_paginas={0: "[PAGINA 1]", 1: "[PAGINA 2]"},
+                           paginas_vision={0: "sin_texto", 1: "sin_texto"})
+            return "", "texto_vision"
+
+        def ocr(*posicionales, paginas, texto_paginas):
+            self.assertEqual(paginas, {0, 1})
+            for indice in paginas:
+                texto_paginas[indice] = f"[PAGINA {indice + 1} - OCR]\nNotebook HP 2 $100.000 $200.000"
+            return "texto OCR", "texto_ocr"
+
+        carpeta = Path("proveedor")
+        with mock.patch.object(extractor, "extraer_archivo", side_effect=lectura), \
+                mock.patch.object(extractor, "extraer_pdf_ocr", side_effect=ocr) as llamada:
+            bloques, registros, pendientes, _, _ = extractor.preparar_bloques_proveedor(
+                carpeta, [carpeta / "economico.pdf"], args)
+        llamada.assert_called_once()
+        self.assertEqual([bloque["pagina"] for bloque in bloques], [1, 2])
+        self.assertEqual(registros[0]["paginas_enviadas"], [1, 2])
+        self.assertEqual(pendientes, [])
+
+    def test_consumo_acumula_multiples_llamadas_del_mismo_archivo(self):
+        args = SimpleNamespace(solo_texto=False, debug=False, max_chars_proveedor=300,
+                               max_imagenes_proveedor=4, modelo="qwen-prueba", timeout=5,
+                               num_ctx=8192, backend="lmstudio", max_tokens=1024,
+                               reintentos_modelo=0, espera_reintento=0, pausa_archivo=0,
+                               sin_consolidar=True, vision=False)
+        bloque = {"archivo": "economico.txt", "pagina": None, "imagen": None,
+                  "texto": "\n".join(["Notebook HP 2 $100.000 $200.000"] * 20)}
+        registro = {"archivo": "economico.txt", "estado_ia": "no_ejecutada", "productos_encontrados": 0}
+        with tempfile.TemporaryDirectory() as temporal:
+            carpeta = Path(temporal)
+            respuesta = ({"productos": []}, "ok", "{}", {"total_tokens": 110})
+            with mock.patch.object(extractor, "descomprimir", return_value=[]), \
+                    mock.patch.object(extractor, "preparar_bloques_proveedor",
+                                      return_value=([bloque], [registro], [], [], set())), \
+                    mock.patch.object(extractor, "consultar_modelo", return_value=respuesta) as llamada:
+                resultado = extractor.procesar_oferta_por_proveedor(carpeta, args, None)
+        consumo = resultado["resultados_archivos"][0]["consumo_local"]
+        self.assertGreater(llamada.call_count, 1)
+        self.assertEqual(consumo["llamadas"], llamada.call_count)
+        self.assertEqual(consumo["total_tokens"], 110 * llamada.call_count)
+        self.assertEqual(resultado["llamadas_modelo"], llamada.call_count)
+
+    def test_proveedor_cruza_dos_anexos_en_una_llamada_y_reanuda_sin_llamar(self):
+        import contextlib
+        import io
+        import sys
+
+        producto = {
+            "producto": "Notebook HP ProBook 440", "marca": "HP", "modelo": "ProBook 440",
+            "cantidad": 2, "precio_unitario": 100000, "precio_total": 200000, "categoria": "equipo",
+            "archivo_producto": "tecnico.txt", "archivo_precio": "economico.txt",
+        }
+        with tempfile.TemporaryDirectory() as temporal:
+            raiz = Path(temporal)
+            licitacion = raiz / "1234-5-LE25"
+            carpeta = licitacion / "1__Proveedor"
+            carpeta.mkdir(parents=True)
+            extractor.escribir_json_atomico(carpeta / "oferta.json",
+                                           {"proveedor": "Proveedor", "rut": "1", "total": "$200.000"})
+            (carpeta / "economico.txt").write_text(
+                "Producto Cantidad Unitario Total\nNotebook 2 $100.000 $200.000", encoding="utf-8")
+            (carpeta / "tecnico.txt").write_text("Notebook HP ProBook 440", encoding="utf-8")
+            (carpeta / "administrativo.txt").write_text(
+                "Declaracion jurada: el oferente no tiene conflictos de interes.", encoding="utf-8")
+            argumentos = ["3_extraer_ia.py", "--dir", str(raiz), "--por-proveedor",
+                          "--backend", "lmstudio", "--modelo", "qwen-prueba", "--sin-calentamiento",
+                          "--rampa", "0", "--metadata-csv", str(raiz / "sin_metadata.csv"),
+                          "--excel", str(raiz / "productos.xlsx")]
+            with mock.patch.object(extractor, "consultar_modelo",
+                                   return_value=({"productos": [producto]}, "ok", "{}", {"total_tokens": 110})) as llamada, \
+                    mock.patch.object(sys, "argv", argumentos), contextlib.redirect_stdout(io.StringIO()):
+                extractor.main()
+                llamada.assert_called_once()
+                prompt = llamada.call_args.args[0]
+                self.assertIn("economico.txt", prompt)
+                self.assertIn("tecnico.txt", prompt)
+                self.assertNotIn("administrativo.txt", prompt)
+                extractor.main()
+                llamada.assert_called_once()
+            checkpoint = json.loads((licitacion / "extraccion_ia.json").read_text(encoding="utf-8"))
+            self.assertEqual(checkpoint[0]["llamadas_modelo"], 1)
+            self.assertEqual(checkpoint[0]["productos"][0]["precio_unitario"], 100000)
+            self.assertEqual(checkpoint[0]["productos"][0]["fuente_producto"], "tecnico.txt")
+            self.assertTrue((raiz / "productos.xlsx").is_file())
 
     def test_resultado_fallido_se_reprocesa(self):
         fallido = {

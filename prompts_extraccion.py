@@ -1,5 +1,8 @@
 PROMPT_ARCHIVO = r'''Eres un extractor de datos de ofertas de licitaciones publicas chilenas.
 Analiza UN archivo de oferta. Puede ser economico o tecnico.
+Las tablas pueden estar desordenadas o sin tabulaciones/separaciones. Analiza
+encabezados, item, descripcion y alineacion para reconstruir correctamente cada
+fila y asociar su producto, cantidad, precio unitario y total.
 
 PROVEEDOR: {proveedor}
 RUT: {rut}
@@ -11,10 +14,10 @@ Devuelve SOLO JSON valido:
 {{
   "productos": [
     {{
-      "item": "numero o identificador de item, o null",
+      "item": null,
       "producto": "descripcion concreta del bien ofertado",
-      "marca": "marca o null",
-      "modelo": "modelo o null",
+      "marca": null,
+      "modelo": null,
       "cantidad": null,
       "cantidad_fuente": "explicita|inferida_total_dividido_unitario|null",
       "precio_unitario": null,
@@ -23,8 +26,8 @@ Devuelve SOLO JSON valido:
       "moneda": "CLP|USD|UTM|null",
       "categoria": "equipo|monitor|impresora|null",
       "pagina": null,
-      "fila_fuente": "identificador de fila o null",
-      "evidencia": "texto literal breve que respalda producto, cantidad y precio",
+      "fila_fuente": null,
+      "evidencia": "fragmento literal breve de la fila",
       "confianza": "alta|media|baja"
     }}
   ],
@@ -32,43 +35,26 @@ Devuelve SOLO JSON valido:
 }}
 
 REGLAS:
-- Producto es obligatorio cuando el archivo identifica algun bien, incluso sin marca.
-- Extrae una fila por item o producto.
-- En archivos tecnicos conserva producto, marca y modelo aunque no haya precio.
-- En archivos economicos conserva cantidad y precios aunque la descripcion sea generica.
-- Busca expresamente campos como "precio por equipo", "monto por equipo",
-    "precio unitario", "oferta por equipo", "precio total", "monto total" y
-    "total equipos". Si aparecen precio unitario y total de la misma oferta,
-    devuelve ambos aunque la cantidad no este escrita.
-- Si existe cantidad y precio total DE ESA LINEA, calcula precio_unitario = total/cantidad.
-- Si la cantidad no aparece pero precio_total/precio_unitario produce una division
-    entera positiva, devuelve ambos precios y deja que el programa infiera la cantidad.
-- Si solo aparece un total general de la oferta, no lo asignes a ningun producto.
-- Si solo aparece un precio total de linea pero no hay cantidad comprobable, conserva
-  precio_total y devuelve precio_unitario null.
-- Marca precio_total_tipo como "linea" solo cuando el total pertenece expresamente
-  a esa fila; usa "oferta" para totales netos/finales generales.
-- No uses IVA, subtotal ni total general como producto o precio unitario.
-- No inventes. Usa null cuando el dato no aparece.
-- Copia en evidencia el fragmento literal que respalda los valores. Si producto,
-  cantidad y precio provienen de lugares distintos, indicalos brevemente.
-- Las lineas marcadas como FILA dentro de una TABLA conservan columnas separadas
-  por || y son la fuente preferente para asociar producto, cantidad y precios.
-- Si aparece "tabla(s) sin columnas recuperables", no interpretes secuencias de
-  digitos separadas por espacios como cantidad o precio salvo que otra parte
-  estructurada del documento confirme exactamente esos valores.
+- Una fila por item ofertado. Conserva marca/modelo aunque falte precio, y
+  cantidad/precios aunque la descripcion economica sea generica.
+- precio_unitario es por unidad; precio_total es de esa linea. Con cantidad y
+  total de la misma fila calcula total/cantidad; sin cantidad devuelve ambos
+  precios disponibles para que el programa compruebe la division.
+- Marca precio_total_tipo "linea" solo para un total de fila. Nunca asignes IVA,
+  subtotal ni total general de la oferta a un producto. Usa precios netos cuando
+  existan ambos y numeros sin simbolos ni separadores de miles.
+- No inventes: usa null si falta un dato o no puedes asociarlo con seguridad.
+- Las filas con || conservan columnas. Si la tabla esta aplanada, reconstruyela
+  con encabezados y contexto, sin mezclar valores de items distintos. Si faltan
+  elementos para distinguir las columnas, deja el dato dudoso en null.
+- Indica pagina/fila y evidencia literal breve de los valores.
 - Si no hay productos, devuelve {{"productos": [], "observaciones": "motivo"}}.
-- El alcance comercial es EXCLUSIVAMENTE: computadores, notebook/laptop/portatil,
-  desktop/escritorio/PC, all-in-one/AIO, workstation, monitores e impresoras o
-  multifuncionales.
-- Excluye siempre televisores, TV, Smart TV, proyectores, tablets, celulares,
-  servidores, storage, switches, routers, redes, accesorios, teclado, mouse,
-  docking, cables, racks, tintas, toner, cartuchos, repuestos, licencias,
-  garantias, instalaciones y servicios, aunque aparezcan junto a un equipo.
-- No devuelvas como productos independientes las especificaciones de un equipo:
-    procesador, RAM, SSD, HDD, disco, puertos, conectividad, sistema operativo,
-  fuente de poder, garantia o servicios.
-- En cada producto agrega "categoria": "equipo|monitor|impresora".
+- Solo computadores, notebook/laptop/portatil, desktop/PC, all-in-one/AIO,
+  workstation, monitores e impresoras/multifuncionales. Excluye TV, proyectores,
+  tablets, celulares, servidores, redes, accesorios, consumibles y servicios.
+- No separes procesador, RAM, disco, sistema operativo, licencias ni garantias
+  como productos. Manten dentro de la descripcion los componentes de un kit
+  que no tengan precio propio.
 
 PISTAS DE PRODUCTOS:
 {pistas_producto}
@@ -164,8 +150,10 @@ REGLAS_VISION = r'''MODO VISION: junto a este mensaje se adjuntan imagenes de pa
 
 # Modo --por-proveedor: una llamada con las paginas relevantes de los anexos de un proveedor.
 PROMPT_PROVEEDOR = r"""Extrae los equipos ofertados por UN proveedor en una licitacion publica chilena.
-Analiza todos sus anexos economicos y tecnicos. Reconstruye cada fila aunque la tabla este
-desordenada o aplanada, usando encabezados, item y contexto visual. {nota_imagenes}
+Analiza las paginas de sus anexos economicos y tecnicos incluidas abajo. Las tablas pueden
+estar desordenadas o sin tabulaciones/separaciones. Reconstruye cada fila usando encabezados,
+item, descripcion, alineacion y contexto visual; asocia cantidad, unitario y total al mismo
+producto, sin mezclar filas. {nota_imagenes}
 
 PROVEEDOR: {proveedor}
 TOTAL DE OFERTA (solo referencia; no asignarlo a productos): {total_oferta}
