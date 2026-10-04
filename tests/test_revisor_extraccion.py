@@ -185,5 +185,33 @@ class RevisorExtraccionTest(unittest.TestCase):
         )
 
 
+class CacheDeDocumentosTest(unittest.TestCase):
+    def test_abrir_mas_pdfs_que_el_limite_de_windows_no_falla(self):
+        # Windows no deja abrir ~510 archivos a la vez; la cache debe cerrar los mas antiguos.
+        with tempfile.TemporaryDirectory() as directorio:
+            rutas = []
+            for i in range(560):
+                ruta = Path(directorio) / f"doc{i}.pdf"
+                with pymupdf.open() as doc:
+                    doc.new_page().insert_text((50, 100), f"documento {i}")
+                    doc.save(ruta)
+                rutas.append(str(ruta))
+            documentos = revisor.Documentos()
+            for ruta in rutas:
+                self.assertEqual(len(documentos.pdf(ruta)), 1)
+            self.assertLessEqual(len(documentos.pdfs), documentos.MAX_PDFS_ABIERTOS)
+            documentos.cerrar()
+
+    def test_un_pdf_reciente_sigue_abierto_al_consultarlo_de_nuevo(self):
+        with tempfile.TemporaryDirectory() as directorio:
+            ruta = Path(directorio) / "a.pdf"
+            with pymupdf.open() as doc:
+                doc.new_page()
+                doc.save(ruta)
+            documentos = revisor.Documentos()
+            self.assertIs(documentos.pdf(str(ruta)), documentos.pdf(str(ruta)))
+            documentos.cerrar()
+
+
 if __name__ == "__main__":
     unittest.main()

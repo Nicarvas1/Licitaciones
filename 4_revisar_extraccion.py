@@ -103,13 +103,26 @@ def enlace_relativo(destino, desde):
 # Cache de documentos
 # ---------------------------------------------------------------------------
 class Documentos:
+    # Windows limita a ~510 los archivos abiertos a la vez: dejar todos los PDFs abiertos hacia fallar
+    # "Failed to open file" desde el documento 510 en adelante (aparecia como "precio NO encontrado").
+    MAX_PDFS_ABIERTOS = 24
+
     def __init__(self):
         self.pdfs = {}
         self.hojas = {}
         self.docx = {}
 
     def pdf(self, ruta):
-        if ruta not in self.pdfs:
+        if ruta in self.pdfs:
+            self.pdfs[ruta] = self.pdfs.pop(ruta)  # el mas reciente al final
+        else:
+            while len(self.pdfs) >= self.MAX_PDFS_ABIERTOS:
+                _, antiguo = next(iter(self.pdfs.items()))
+                del self.pdfs[next(iter(self.pdfs))]
+                try:
+                    antiguo.close()
+                except Exception:
+                    pass
             self.pdfs[ruta] = fitz.open(ruta)
         return self.pdfs[ruta]
 
@@ -179,7 +192,10 @@ def palabra_es_monto(texto, valor):
 def palabra_es_entero(texto, valor):
     if not isinstance(valor, (int, float)) or not float(valor).is_integer():
         return False
-    return texto.strip(" .,;:()$-") == str(int(valor))
+    limpio = texto.strip(" .,;:()$-")
+    # "10,00" o "10.00 Unidades" tambien es el entero 10
+    limpio = re.sub(r"[.,]0{1,2}$", "", limpio)
+    return limpio == str(int(valor))
 
 
 PALABRAS_VACIAS = {"de", "del", "la", "el", "los", "las", "con", "para", "por", "en", "una", "gb", "ram", "ssd"}
@@ -213,10 +229,12 @@ def verificar_descripcion(producto, texto):
         if any(re.search(r"[a-z]", t) and re.search(r"\d", t) for t in visibles):
             return "descripcion_no_coincide", "la fila describe otro producto (modelo diferente)"
         return "parcial", "el modelo no esta en la fila; revisar descripcion en varias lineas"
-    if codigos - visibles:
+    # Una descripcion larga suele partirse en varias lineas del PDF: basta con que coincida la mitad
+    # de los codigos (modelo, procesador, memoria...) para aceptar la identidad.
+    if codigos - visibles and len(codigos & visibles) * 2 < len(codigos):
         return "parcial", "no se puede confirmar el modelo completo en la fila"
     numeros_descripcion = {t for t in esperados if t.isdigit()}
-    if numeros_descripcion - visibles:
+    if numeros_descripcion - visibles and len(numeros_descripcion & visibles) * 2 < len(numeros_descripcion):
         return "parcial", "faltan numeros de modelo/especificacion de la descripcion; revisar la identidad"
     genericos = {"notebook", "laptop", "computador", "computadora", "desktop", "equipo", "monitor",
                  "impresora", "multifuncional", "tipo", "unidad", "unidades", "precio", "total"}
@@ -367,8 +385,18 @@ def evidencia_pdf(documentos, ruta, producto, ruta_imagen, dpi):
     if mejor is None:
         if coordenadas:
             return coordenadas
-        return {"pagina": pagina_num, "ubicado": "no_encontrado",
-                "nota": "el precio no aparece como texto en el PDF (escaneado o monto inexistente)"}
+        resultado = {"pagina": pagina_num, "ubicado": "no_encontrado",
+                     "nota": "el precio no aparece como texto en el PDF (escaneado o monto inexistente)"}
+        # Documento escaneado: se muestra la pagina completa para que el revisor lo verifique a ojo.
+        try:
+            indice = (pagina_num - 1) if pagina_num and 1 <= pagina_num <= len(documento) else 0
+            pagina = documento[indice]
+            resultado["imagen"] = dibujar_y_recortar(documento, indice, [], pagina.rect, ruta_imagen, dpi)
+            resultado["pagina"] = indice + 1
+            resultado["nota"] += "; se muestra la pagina completa para verificarla a mano"
+        except Exception:
+            pass
+        return resultado
 
     _, indice, banda, encontrado, coincidencias, en_linea = mejor
     pagina = documento[indice]
@@ -392,6 +420,14 @@ def evidencia_pdf(documentos, ruta, producto, ruta_imagen, dpi):
     imagen = dibujar_y_recortar(documento, indice, marcas, recorte_visual, ruta_imagen, dpi)
 
     estado, nota = estado_fila(producto, " ".join(p[2] for p in en_linea), faltan)
+    if estado == "parcial" and not faltan:
+        # La descripcion de una fila suele ocupar varias lineas del PDF: se reintenta con una banda mas alta.
+        ancha = fitz.Rect(banda.x0, banda.y0 - 30, banda.x1, banda.y1 + 30)
+        texto_ancho = " ".join(t for v, _, t in palabras_visuales(pagina)
+                               if ancha.y0 <= (v.y0 + v.y1) / 2 <= ancha.y1)
+        estado_ancho, _ = verificar_descripcion(producto, texto_ancho)
+        if estado_ancho == "exacto":
+            estado, nota = "exacto", "descripcion en varias lineas de la misma fila (precio, total y cantidad verificados)"
     if ubicacion.get("continuacion"):
         nota += "; la tabla continua de la pagina anterior (el encabezado esta alli)"
     return {"imagen": imagen, "pagina": indice + 1, "ubicado": estado, "nota": nota}
@@ -558,6 +594,189 @@ def comparar_con_otro(producto, precios_otro):
     return "mismo_precio" if any(ia.numeros_iguales(unitario, p) for p in precios_otro) else "precio_distinto"
 
 
+
+# ---------------------------------------------------------------------------
+# Trazabilidad: de que documento salio cada dato y como se obtuvo
+# ---------------------------------------------------------------------------
+TIPOS_DOC = {"economico": "anexo económico", "tecnico": "anexo técnico", "otro": "otro documento"}
+LECTURAS = {"texto": "texto del documento", "texto_ocr": "OCR (Tesseract)", "texto_vision": "texto + imagen (visión)",
+            "imagen": "imagen (visión)"}
+
+
+def resolver_archivo(nombre, carpeta):
+    """Archivo real del proveedor al que se refiere `nombre`; None si no existe (p.ej. nombre inventado)."""
+    nombre = str(nombre or "").strip()
+    if not nombre or nombre == "consolidacion" or carpeta is None:
+        return None
+    ruta = carpeta / nombre
+    if ruta.is_file():
+        return ruta
+    base = Path(nombre).name.lower()
+    todos = [r for r in carpeta.rglob("*") if r.is_file() and r.suffix.lower() not in (".json", ".csv")]
+    candidatos = [r for r in todos if r.name.lower() == base]
+    if len(candidatos) == 1:
+        return candidatos[0]
+    # El modelo a veces abrevia el nombre: se acepta solo si el nombre citado esta contenido en un unico archivo.
+    parcial = [r for r in todos if len(base) >= 12 and base in r.name.lower()]
+    return parcial[0] if len(parcial) == 1 else None
+
+
+def lectura_de(resultado, relativo):
+    for registro in resultado.get("resultados_archivos", []):
+        if registro.get("archivo") == relativo:
+            estado = str(registro.get("estado_lectura") or "")
+            texto = LECTURAS.get(estado, estado or "—")
+            if registro.get("paginas_vision"):
+                texto += f" · páginas como imagen: {', '.join(registro['paginas_vision'])}"
+            return texto
+    return "—"
+
+
+def trazabilidad_producto(producto, resultado, carpeta):
+    """Filas campo -> documento/pagina/como se obtuvo, lista de documentos distintos y si se mezclan."""
+    def relativo(nombre):
+        ruta = resolver_archivo(nombre, carpeta)
+        return str(ruta.relative_to(carpeta)) if ruta else None
+
+    base = producto.get("archivo_fuente")
+    base = None if base == "consolidacion" else base
+    f_producto = relativo(producto.get("fuente_producto") or base)
+    f_precio = relativo(producto.get("fuente_precio") or base)
+    f_marca = relativo(producto.get("fuente_marca") or producto.get("fuente_producto") or base)
+    citados_inexistentes = [n for n in (producto.get("fuente_producto"), producto.get("fuente_precio"))
+                            if n and n != "consolidacion" and resolver_archivo(n, carpeta) is None]
+    metodo_marca = {"cruce_identidad_exacta": "marca tomada de otra ficha con el mismo modelo exacto",
+                    "tipo_con_marca_unica": "marca única entre las fichas técnicas del mismo tipo de equipo"
+                    }.get(producto.get("metodo_marca"), "leída directamente del documento")
+    cantidad_fuente = {"explicita": "cantidad escrita en el documento",
+                       "inferida_total_dividido_unitario": "cantidad inferida = total ÷ unitario (la división es exacta)",
+                       "anexo_economico": "cantidad tomada de la fila del anexo económico"
+                       }.get(producto.get("cantidad_fuente"), "cantidad leída del documento")
+    como_precio = ("fila del anexo económico verificada (cantidad × unitario = total)"
+                   if producto.get("precio_reconciliado_fuente") or producto.get("rescatado_fila_economica")
+                   else "leído por el modelo")
+
+    def fila(campo, valor, archivo, pagina, como):
+        return {"campo": campo, "valor": valor, "archivo": archivo, "pagina": pagina,
+                "doc": TIPOS_DOC.get(ia.tipo_documental(Path(archivo).name), "") if archivo else "",
+                "lectura": lectura_de(resultado, archivo) if archivo else "", "como": como}
+
+    pag_prod = producto.get("pagina_producto") or producto.get("pagina")
+    pag_precio = producto.get("pagina_precio") or producto.get("pagina")
+    filas = [
+        fila("Producto", producto.get("producto"), f_producto, pag_prod, "descripción del equipo"),
+        fila("Marca", producto.get("marca"), f_marca if producto.get("marca") else None,
+             producto.get("pagina_marca") or pag_prod, metodo_marca if producto.get("marca") else "no identificada"),
+        fila("Cantidad", producto.get("cantidad"), f_precio, pag_precio, cantidad_fuente),
+        fila("Precio unitario", producto.get("precio_unitario"), f_precio, pag_precio, como_precio),
+        fila("Precio total", producto.get("precio_total"), f_precio, pag_precio, como_precio),
+    ]
+    usados = []
+    for item in filas:
+        if item["archivo"] and item["archivo"] not in usados and item["valor"] not in (None, ""):
+            usados.append(item["archivo"])
+    mezcla = "varios" if len(usados) > 1 else ("uno" if usados else "sin_trazabilidad")
+    return filas, usados, mezcla, citados_inexistentes
+
+
+def pasos_proceso(producto, resultado, usados):
+    """Descripcion en lenguaje simple de lo que hizo el extractor con este producto."""
+    modo = resultado.get("modo")
+    pasos = ["Se leyeron los anexos del proveedor y se enviaron al modelo local "
+             f"({resultado.get('modelo', '?')}) "
+             + ("en una sola llamada por proveedor" if modo == "por_proveedor" else "archivo por archivo")]
+    if modo != "por_proveedor":
+        estado = str(resultado.get("estado_consolidacion") or "")
+        if estado == "ok":
+            pasos.append("un segundo paso del modelo consolidó los hallazgos de todos los archivos (une ficha técnica y precio)")
+        elif estado in ("omitida", ""):
+            pasos.append("sin consolidación: el producto viene directo del archivo")
+    if len(usados) > 1:
+        pasos.append(f"el dato combina {len(usados)} documentos distintos del mismo proveedor (ver tabla)")
+    if producto.get("metodo_marca"):
+        pasos.append("la marca no estaba en la fila del precio: el código la tomó de otra ficha técnica")
+    if producto.get("rescatado_fila_economica"):
+        pasos.append("el modelo no había asociado esta fila de precios a un producto; el código la rescató del anexo económico")
+    if producto.get("precio_reconciliado_fuente"):
+        pasos.append("el precio se corrigió con la fila verificable del anexo económico")
+    if producto.get("precio_fuente_no_coincide"):
+        pasos.append("se anuló el precio del modelo porque no coincide con ninguna fila verificable del documento citado")
+    pasos.append("el código validó cantidad × unitario = total, la plausibilidad del precio y los conflictos entre fuentes")
+    return pasos
+
+
+def terminos_identidad(producto):
+    """Textos que identifican al producto en una ficha: modelo y codigos de la descripcion."""
+    terminos = []
+    modelo = re.sub(r"\s*\([^)]*\)", "", str(producto.get("modelo") or "")).strip()
+    if len(modelo) >= 4:
+        terminos.append(modelo)
+    descripcion = str(producto.get("producto") or "")
+    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9\-/\.]{3,}", descripcion):
+        if re.search(r"[A-Za-z]", token) and re.search(r"\d", token) and token not in terminos:
+            terminos.append(token)
+    if producto.get("marca") and len(descripcion) > 8:
+        terminos.append(" ".join(descripcion.split()[:3]))
+    return terminos[:6]
+
+
+def evidencia_identidad_pdf(documentos, ruta, producto, ruta_imagen, dpi, pagina_sugerida=None):
+    """Marca en amarillo, dentro de una ficha o anexo, donde se identifica el producto (modelo/marca)."""
+    documento = documentos.pdf(ruta)
+    terminos = terminos_identidad(producto)
+    if producto.get("marca"):
+        terminos.append(str(producto["marca"]))
+    paginas = list(range(min(len(documento), 40)))
+    try:
+        sugerida = int(pagina_sugerida) - 1 if pagina_sugerida else None
+    except (TypeError, ValueError):
+        sugerida = None
+    if sugerida is not None and 0 <= sugerida < len(documento):
+        paginas = [sugerida] + [i for i in paginas if i != sugerida]
+    for termino in terminos:
+        for indice in paginas:
+            pagina = documento[indice]
+            aciertos = pagina.search_for(termino)
+            if not aciertos:
+                continue
+            visual = aciertos[0] * pagina.rotation_matrix
+            recorte = fitz.Rect(pagina.rect.x0, max(pagina.rect.y0, visual.y0 - 70),
+                                pagina.rect.x1, min(pagina.rect.y1, visual.y1 + 70))
+            marcas = [(h, (0.95, 0.75, 0.05), True) for h in aciertos[:6]]
+            imagen = dibujar_y_recortar(documento, indice, marcas, recorte, ruta_imagen, dpi)
+            return {"imagen": imagen, "pagina": indice + 1, "ubicado": "exacto",
+                    "nota": f"se marcó «{termino}» (identifica el producto en este documento)"}
+    return {"pagina": sugerida + 1 if sugerida is not None else None, "ubicado": "no_encontrado",
+            "nota": "no se encontró el modelo ni la marca como texto en este documento (¿escaneado o distinto producto?)"}
+
+
+def evidencia_identidad_tabular(documentos, ruta, producto):
+    """Fragmento de planilla/Word/texto donde aparece el modelo o la marca del producto."""
+    sufijo = ruta.suffix.lower()
+    if sufijo in (".xlsx", ".xlsm"):
+        filas = [[celda_texto(c) for c in fila] for fila in documentos.filas_excel(ruta)]
+    elif sufijo == ".docx":
+        tablas, parrafos = documentos.tablas_docx(ruta)
+        filas = [[celda_texto(c) for c in fila] for tabla in tablas for fila in tabla] + [[p[0]] for p in parrafos]
+    else:
+        filas = [[celda_texto(c) for c in fila] for fila in documentos.filas_csv(ruta)]
+    terminos = [ia.texto_normalizado(t) for t in terminos_identidad(producto)]
+    if producto.get("marca"):
+        terminos.append(ia.texto_normalizado(producto["marca"]))
+    for termino in terminos:
+        for indice, fila in enumerate(filas):
+            if termino and termino in ia.texto_normalizado(" ".join(fila)):
+                inicio = max(0, indice - 2)
+                cuerpo = "".join(
+                    "<tr class='%s'>%s</tr>" % ("objetivo" if numero == indice else "",
+                                                 "".join("<td>%s</td>" % html.escape(c) for c in f if c))
+                    for numero, f in zip(range(inicio, indice + 3), filas[inicio: indice + 3]))
+                return {"tabla_html": f"<div class='tabla-titulo'>Fragmento donde aparece «{html.escape(termino)}»</div>"
+                                      f"<table class='grilla'>{cuerpo}</table>",
+                        "ubicado": "exacto", "nota": f"se encontró «{termino}» en el documento"}
+    return {"ubicado": "no_encontrado", "nota": "no se encontró el modelo ni la marca en este documento"}
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pagina de revision con evidencia por producto.")
     parser.add_argument("--dir", required=True, help="Carpeta de ofertas del lote (ej. lotes/2025-11/ofertas)")
@@ -649,6 +868,53 @@ def main():
                         enlace += f"#page={evidencia['pagina']}"
                     registro["abrir"] = enlace
                     registro["archivo"] = str(Path(evidencia["archivo"]).relative_to(licitacion))
+                # --- trazabilidad: de que documento salio cada dato, y evidencia por documento
+                filas_traza, usados, mezcla, inexistentes = trazabilidad_producto(producto, resultado, carpeta)
+                registro["trazabilidad"] = filas_traza
+                registro["documentos_usados"] = usados
+                registro["mezcla"] = mezcla
+                registro["fuentes_inexistentes"] = inexistentes
+                registro["proceso"] = pasos_proceso(producto, resultado, usados)
+                principal = str(Path(evidencia["archivo"]).relative_to(carpeta)) if evidencia.get("archivo") else None
+                extras, vistos_extra = [], {principal}
+                for rol, nombre in (("Producto y marca (ficha)", producto.get("fuente_producto")),
+                                    ("Marca", producto.get("fuente_marca"))):
+                    ruta_extra = resolver_archivo(nombre, carpeta) if carpeta else None
+                    if ruta_extra is None:
+                        continue
+                    relativo_extra = str(ruta_extra.relative_to(carpeta))
+                    if relativo_extra in vistos_extra:
+                        continue
+                    vistos_extra.add(relativo_extra)
+                    try:
+                        if ruta_extra.suffix.lower() == ".pdf":
+                            sufijo = hashlib.sha1(str(ruta_extra).encode("utf-8")).hexdigest()[:8]
+                            extra = evidencia_identidad_pdf(
+                                documentos, ruta_extra, producto,
+                                carpeta_img / nombre_imagen_revision(identificador + "__id__" + sufijo), args.dpi,
+                                producto.get("pagina_marca") if rol == "Marca" else producto.get("pagina_producto"))
+                        elif ruta_extra.suffix.lower() in (".xlsx", ".xlsm", ".docx", ".csv", ".tsv", ".txt"):
+                            extra = evidencia_identidad_tabular(documentos, ruta_extra, producto)
+                        else:
+                            continue
+                    except Exception as exc:
+                        extra = {"ubicado": "no_encontrado", "nota": f"error al generar evidencia: {exc}"}
+                    extra_registro = {"rol": rol, "archivo": relativo_extra, "pagina": extra.get("pagina"),
+                                      "ubicado": extra["ubicado"], "nota": extra.get("nota", ""),
+                                      "abrir": enlace_relativo(ruta_extra, salida)
+                                      + (f"#page={extra['pagina']}"
+                                         if ruta_extra.suffix.lower() == ".pdf" and extra.get("pagina") else "")}
+                    if extra.get("imagen"):
+                        extra_registro["imagen"] = enlace_relativo(extra["imagen"], salida)
+                    if extra.get("tabla_html"):
+                        extra_registro["tabla_html"] = extra["tabla_html"]
+                    extras.append(extra_registro)
+                registro["evidencias_extra"] = extras
+                registro["otros_documentos"] = [
+                    {"archivo": str(r.relative_to(carpeta)), "abrir": enlace_relativo(r, salida)}
+                    for r in (resolver_archivo(n, carpeta) for n in (producto.get("fuentes_respaldo") or []))
+                    if r is not None and str(r.relative_to(carpeta)) not in vistos_extra
+                ] if carpeta else []
                 registro["pagina"] = evidencia.get("pagina")
                 registro["ubicado"] = evidencia["ubicado"]
                 registro["nota"] = evidencia.get("nota", "")
@@ -666,7 +932,7 @@ def main():
 
     plantilla = PLANTILLA_HTML
     datos = json.dumps(registros, ensure_ascii=False, default=str).replace("</", "<\\/")
-    clave = f"revision_v3_{args.fuente}_{raiz.parent.name}"  # v3: la v2 mostraba imagenes cruzadas (RUT con puntos)
+    clave = f"revision_v4_{args.fuente}_{raiz.parent.name}"  # v3: la v2 mostraba imagenes cruzadas (RUT con puntos)
     pagina = (plantilla.replace("__DATOS__", datos)
               .replace("__CLAVE__", json.dumps(clave))
               .replace("__TITULO__", html.escape(f"Revision {args.fuente} - {raiz.parent.name}"))
@@ -722,6 +988,12 @@ tr.salto td{text-align:center;color:var(--suave);border:0}.tabla-titulo{font-siz
 .acciones input{flex:1;min-width:200px;font:inherit;padding:5px 8px;border:1px solid var(--borde);border-radius:5px}
 .aviso{color:var(--mal);font-weight:600}.paginacion{text-align:center;margin:10px 0 30px}
 .paginacion button{font:inherit;padding:5px 12px;margin:0 4px}
+.traza{margin:8px 0;padding:8px 10px;background:#f7f9fc;border:1px solid var(--borde);border-radius:6px}
+.traza-t{font-weight:600;margin-bottom:4px}.traza table{border-collapse:collapse;font-size:12.5px;width:100%}
+.traza td,.traza th{border-bottom:1px solid #e3e7ee;padding:3px 6px;text-align:left;vertical-align:top}
+.traza th{color:var(--suave);font-size:11px;text-transform:uppercase}.proceso{font-size:12.5px;color:var(--suave);margin-top:6px}
+.proceso ol{margin:3px 0 0 18px;padding:0}.sub-evid{margin-top:10px}.sub-evid h4{margin:0 0 3px;font-size:13px}
+.b-mezcla{background:#fff4d6;color:#8a5a00}
 a{color:var(--azul)}
 </style></head><body>
 <header>
@@ -730,6 +1002,7 @@ a{color:var(--azul)}
     <input id="f-texto" placeholder="Buscar proveedor, producto, modelo..." size="30">
     <select id="f-ubicado"><option value="">Ubicación: todas</option><option value="no_encontrado">Precio NO encontrado</option><option value="descripcion_no_coincide">Descripción de otro producto</option><option value="parcial">Datos no calzan con la fila</option><option value="exacto">Fila verificada</option><option value="sin_archivo">Sin archivo</option></select>
     <select id="f-validacion"><option value="">Validación: todas</option><option>ok</option><option>revisar</option><option>incompleto</option><option>inconsistente</option></select>
+    <select id="f-mezcla"><option value="">Documentos: todos</option><option value="varios">Combina varios documentos</option><option value="uno">Un solo documento</option><option value="sin_trazabilidad">Sin trazabilidad</option></select>
     <select id="f-otro"><option value="">Otro método: todos</option><option value="precio_distinto">Precio distinto</option><option value="mismo_precio">Mismo precio</option><option value="otro_sin_precios">Otro sin precios</option></select>
     <select id="f-decision"><option value="">Revisión: todas</option><option value="pendiente">Sin revisar</option><option value="correcto">Correcto</option><option value="incorrecto">Incorrecto</option><option value="dudoso">Dudoso</option></select>
     <label><input type="checkbox" id="f-muestra"> Solo muestra aleatoria (__MUESTRA__)</label>
@@ -768,6 +1041,7 @@ function filtrados() {
     if (ub && d.ubicado !== ub) return false;
     if (val && d.estado_validacion !== val) return false;
     if (otro && d.otro_metodo !== otro) return false;
+    if ($("f-mezcla").value && d.mezcla !== $("f-mezcla").value) return false;
     if (dec && decision !== dec) return false;
     if (texto && ![d.proveedor, d.producto, d.marca, d.modelo, d.licitacion, d.rut].join(" ").toLowerCase().includes(texto)) return false;
     return true;
@@ -812,6 +1086,20 @@ function tarjeta(d) {
   if (d.imagen) evidencia = `<div class="leyenda">Fila<span style="border:2px solid #db1a1a"></span> Cantidad<span style="background:#1a59e6"></span> P. unitario<span style="background:#0da633"></span> Total<span style="background:#8c33bf"></span></div><img loading="lazy" src="${esc(d.imagen)}">`;
   else if (d.tabla_html) evidencia = d.tabla_html;
   else evidencia = `<div class="aviso">${esc(d.nota || "sin evidencia")}</div><div class="sub">Evidencia guardada: ${esc(d.evidencia_texto || "—")}</div>`;
+  const tituloPrincipal = `<h4>Precio y cantidad — ${esc(d.archivo || "sin archivo")}${d.pagina ? " · pág. " + d.pagina : ""}${d.abrir ? ` · <a href="${esc(d.abrir)}" target="_blank">abrir</a>` : ""}</h4>`;
+  const extras = (d.evidencias_extra || []).map(x => {
+    const cuerpo = x.imagen ? `<img loading="lazy" src="${esc(x.imagen)}">` : (x.tabla_html || `<div class="aviso">${esc(x.nota)}</div>`);
+    return `<div class="sub-evid"><h4>${esc(x.rol)} — ${esc(x.archivo)}${x.pagina ? " · pág. " + x.pagina : ""} · <a href="${esc(x.abrir)}" target="_blank">abrir</a></h4>
+      <div class="${x.ubicado === "exacto" ? "sub" : "aviso"}">${esc(x.nota)}</div><div class="evidencia">${cuerpo}</div></div>`;
+  }).join("");
+  const otros = (d.otros_documentos || []).length ? `<div class="sub">Otros documentos relacionados: ${d.otros_documentos.map(o => `<a href="${esc(o.abrir)}" target="_blank">${esc(o.archivo)}</a>`).join(" · ")}</div>` : "";
+  const insignia = d.mezcla === "varios" ? `<span class="badge b-mezcla">⚠ combina ${d.documentos_usados.length} documentos</span>` : d.mezcla === "uno" ? '<span class="badge b-ok">un solo documento</span>' : '<span class="badge b-mal">sin trazabilidad</span>';
+  const inexistentes = (d.fuentes_inexistentes || []).length ? `<span class="badge b-mal">el modelo citó archivos que no existen: ${esc(d.fuentes_inexistentes.join(", "))}</span>` : "";
+  const filasTraza = (d.trazabilidad || []).map(t => `<tr><td>${esc(t.campo)}</td><td>${typeof t.valor === "number" ? monto(t.valor) : esc(String(t.valor ?? "—").slice(0, 70))}</td>
+      <td>${esc(t.archivo || "—")}${t.doc ? ` <span class="sub">(${esc(t.doc)})</span>` : ""}</td><td>${t.pagina ?? "—"}</td><td>${esc(t.lectura || "")}</td><td>${esc(t.como)}</td></tr>`).join("");
+  const traza = filasTraza ? `<div class="traza"><div class="traza-t">De dónde salió cada dato ${insignia} ${inexistentes}</div>
+    <table><tr><th>Dato</th><th>Valor</th><th>Documento</th><th>Pág.</th><th>Cómo se leyó</th><th>Cómo se obtuvo</th></tr>${filasTraza}</table>
+    <div class="proceso">Qué hizo el extractor con este producto:<ol>${(d.proceso || []).map(p => `<li>${esc(p)}</li>`).join("")}</ol></div></div>` : "";
   return `<div class="tarjeta ${dec.decision ? "d-" + dec.decision : ""}" id="t-${esc(d.id)}">
     <div class="cabecera"><div><h2>${esc(d.producto)}</h2>
       <div class="sub">${esc(d.licitacion)} · ${esc(d.proveedor)} (${esc(d.rut)}) · ${esc(d.archivo || "")}${d.pagina ? " · pág. " + d.pagina : ""}
@@ -823,7 +1111,9 @@ function tarjeta(d) {
       <div><b>Método</b>${esc(d.metodo || "—")}</div></div>
     ${d.alertas.length ? `<div>${d.alertas.map(a => `<span class="badge b-duda">${esc(a)}</span>`).join("")}</div>` : ""}
     ${d.nota && (d.imagen || d.tabla_html) ? `<div class="${["parcial", "descripcion_no_coincide"].includes(d.ubicado) ? "aviso" : "sub"}">${esc(d.nota)}</div>` : ""}
-    <div class="evidencia">${evidencia}</div>
+    ${traza}
+    <div class="sub-evid">${tituloPrincipal}<div class="evidencia">${evidencia}</div></div>
+    ${extras}${otros}
     <div class="acciones">
       <button data-id="${esc(d.id)}" data-d="correcto" class="${dec.decision==="correcto"?"sel-correcto":""}">✔ Correcto</button>
       <button data-id="${esc(d.id)}" data-d="incorrecto" class="${dec.decision==="incorrecto"?"sel-incorrecto":""}">✘ Incorrecto</button>
@@ -854,12 +1144,12 @@ document.addEventListener("change", e => {
   if (!e.target.classList.contains("comentario")) return;
   const id = e.target.dataset.id; decisiones[id] = {...(decisiones[id] || {}), comentario: e.target.value}; guardar();
 });
-["f-texto","f-ubicado","f-validacion","f-otro","f-decision","f-muestra"].forEach(id =>
+["f-texto","f-ubicado","f-validacion","f-mezcla","f-otro","f-decision","f-muestra"].forEach(id =>
   $(id).addEventListener(id === "f-texto" ? "input" : "change", () => { pagina = 0; render(); }));
 $("exportar").addEventListener("click", () => {
-  const cols = ["id","licitacion","proveedor","rut","producto","tipo","marca","modelo","cantidad","precio_unitario","precio_total","estado_validacion","metodo","ubicado","otro_metodo","archivo","pagina","en_muestra","decision","comentario"];
+  const cols = ["id","licitacion","proveedor","rut","producto","tipo","marca","modelo","cantidad","precio_unitario","precio_total","estado_validacion","metodo","ubicado","otro_metodo","archivo","pagina","mezcla","documentos_usados","en_muestra","decision","comentario"];
   const filas = DATOS.map(d => { const x = decisiones[d.id] || {};
-    return cols.map(c => c === "decision" ? (x.decision || "") : c === "comentario" ? (x.comentario || "") : c === "en_muestra" ? (EN_MUESTRA.has(d.id) ? "si" : "no") : (d[c] ?? "")); });
+    return cols.map(c => c === "decision" ? (x.decision || "") : c === "comentario" ? (x.comentario || "") : c === "en_muestra" ? (EN_MUESTRA.has(d.id) ? "si" : "no") : c === "documentos_usados" ? (d[c] || []).join(" | ") : (d[c] ?? "")); });
   const csv = "\ufeff" + [cols, ...filas].map(f => f.map(v => `"${String(v).replace(/"/g, '""')}"`).join(";")).join("\r\n");
   const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([csv], {type: "text/csv"}));
   a.download = CLAVE + ".csv"; a.click();

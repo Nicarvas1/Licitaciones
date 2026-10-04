@@ -250,6 +250,14 @@ def procesar_licitacion(context, identificador, es_qs=False,
         except Exception:
             html_pag = html0
         ofertas = parsear_ofertas(html_pag)
+        # La grilla a veces llega vacia (carga lenta del iframe): se vuelve a leer antes de darla por vacia.
+        intentos_grilla = 0
+        while not ofertas and pag == 1 and intentos_grilla < 3:
+            intentos_grilla += 1
+            print(f"   ↻ grilla sin ofertas; releyendo ({intentos_grilla}/3)...")
+            time.sleep(4.0 * intentos_grilla)
+            frame, html_pag = localizar_frame(page)
+            ofertas = parsear_ofertas(html_pag)
         print(f"   Página {pag}/{n_pag}: {len(ofertas)} ofertas")
         for of in ofertas:
             rut = of["rut"] or "sin_rut"
@@ -281,6 +289,11 @@ def procesar_licitacion(context, identificador, es_qs=False,
                 print(f"       - {tipo}")
                 total_arch += descargar_popup(context, url_popup, carpeta_of, tipo)
 
+    if total_of == 0 and (carpeta_lic / "metadata.json").is_file():
+        # Respuesta vacia sobre una licitacion que ya tenia datos: se conserva lo descargado.
+        page.close()
+        print("   ⚠️ la grilla siguio vacia; se conserva la metadata anterior")
+        return {"codigo": codigo, "ofertas": 0, "archivos": 0, "estado": "sin_ofertas_leidas"}
     (carpeta_lic / "metadata.json").write_text(
         json.dumps({"codigo": codigo, "ofertas": total_of, "archivos": total_arch,
                     "paginas": n_pag}, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -297,7 +310,7 @@ def procesar_licitacion(context, identificador, es_qs=False,
 def procesar_con_reintentos(browser, identificador, es_qs, tipos_anexos,
                             ruts_objetivo=None, max_intentos=2,
                             pausa_reintento=15, ruts_excluir=None):
-    reintentables = {"sin_cuadro", "error_ficha", "error_cuadro"}
+    reintentables = {"sin_cuadro", "error_ficha", "error_cuadro", "sin_ofertas_leidas"}
     resultado = {"ofertas": 0, "archivos": 0, "estado": "error_desconocido"}
     for intento in range(1, max(1, max_intentos) + 1):
         context = browser.new_context(accept_downloads=True)
@@ -321,6 +334,8 @@ def procesar_con_reintentos(browser, identificador, es_qs, tipos_anexos,
 
     if resultado.get("estado") == "sin_cuadro":
         resultado["estado"] = "error_sin_cuadro"
+    elif resultado.get("estado") == "sin_ofertas_leidas":
+        resultado["estado"] = "error_sin_ofertas_leidas"
     return resultado
 
 
@@ -407,6 +422,46 @@ def ruts_en_disco(carpeta_licitacion):
     return ruts
 
 
+def faltantes_en_disco(carpeta_licitacion, tipos=("economico", "tecnico")):
+    """RUTs con enlace a un anexo (de los tipos pedidos) que no se descargo a disco."""
+    faltan = set()
+    carpeta_licitacion = Path(carpeta_licitacion)
+    if not carpeta_licitacion.is_dir():
+        return faltan
+    for carpeta in carpeta_licitacion.iterdir():
+        oferta = carpeta / "oferta.json"
+        if not (carpeta.is_dir() and oferta.is_file()):
+            continue
+        try:
+            datos = json.loads(oferta.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        bajados = {f.name.split("__")[0] for f in carpeta.iterdir() if f.is_file()}
+        if any(t in (datos.get("enlaces_anexos") or {}) and t not in bajados for t in tipos):
+            if datos.get("rut"):
+                faltan.add(str(datos["rut"]).strip())
+    return faltan
+
+
+def recontar_archivos(carpeta_licitacion):
+    """Deja metadata.json con el conteo real de archivos en disco (tras una reparacion parcial)."""
+    carpeta_licitacion = Path(carpeta_licitacion)
+    meta = carpeta_licitacion / "metadata.json"
+    if not meta.is_file():
+        return 0
+    total = sum(1 for f in carpeta_licitacion.rglob("*")
+                if f.is_file() and f.suffix.lower() not in (".json", ".csv", ".html"))
+    try:
+        datos = json.loads(meta.read_text(encoding="utf-8"))
+        datos["archivos"] = total
+        datos["ofertas"] = sum(1 for c in carpeta_licitacion.iterdir()
+                               if c.is_dir() and (c / "oferta.json").is_file())
+        meta.write_text(json.dumps(datos, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (OSError, json.JSONDecodeError):
+        pass
+    return total
+
+
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
@@ -432,6 +487,11 @@ def main():
                     help="Intentos por licitación con sesiones independientes (default: 2).")
     ap.add_argument("--pausa-reintento", type=float, default=15,
                     help="Segundos antes de reintentar una respuesta anómala (default: 15).")
+    ap.add_argument("--salida", default="ofertas",
+                    help="Carpeta donde se guardan las licitaciones (default: ofertas).")
+    ap.add_argument("--reparar", action="store_true",
+                    help="Repara descargas incompletas: reprocesa las licitaciones con error o sin "
+                         "metadata y baja solo los anexos economicos/tecnicos que faltan en disco.")
     ap.add_argument("--pausa-licitaciones", type=float, default=3,
                     help="Segundos entre licitaciones para reducir bloqueos (default: 3).")
     args = ap.parse_args()
@@ -453,7 +513,9 @@ def main():
     if not any([args.csv, args.codigo, args.qs]):
         sys.exit("Indica --csv para_scrapear.csv  o  --codigo <cod>  o  --qs <qs>")
 
-    SALIDA.mkdir(exist_ok=True)
+    global SALIDA
+    SALIDA = Path(args.salida)
+    SALIDA.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not args.ver)
@@ -491,7 +553,24 @@ def main():
                 return False
             return True
 
-        if args.solo_tecnicos or args.solo_tecnicos_fallback:
+        reparaciones = {}
+        if args.reparar:
+            tipos_anexos = {"economico", "tecnico"}
+            for f in filas:
+                cod = (f.get("codigo") or "").strip()
+                carpeta = SALIDA / cod
+                est = (f.get("scraping_estado") or "").strip().lower()
+                if est.startswith("error") or not (carpeta / "metadata.json").is_file():
+                    reparaciones[cod] = None  # licitacion completa
+                else:
+                    faltan = faltantes_en_disco(carpeta)
+                    if faltan:
+                        reparaciones[cod] = faltan
+            args.reintentar_errores = True
+
+        if args.reparar:
+            pendientes = [f for f in filas if (f.get("codigo") or "").strip() in reparaciones]
+        elif args.solo_tecnicos or args.solo_tecnicos_fallback:
             pendientes = list(filas)
         else:
             pendientes = [f for f in filas if pendiente(f)]
@@ -513,6 +592,8 @@ def main():
             print(f"\n[{i}/{total}] {codigo}")
             ruts_objetivo = None
             ruts_excluir = None
+            if args.reparar:
+                ruts_objetivo = reparaciones.get(codigo)
             if args.solo_tecnicos_fallback:
                 # Se descargan tecnicos para todos los proveedores SALVO los que ya
                 # tienen precio en algun resultado (local o OpenAI historico). Asi
@@ -535,6 +616,8 @@ def main():
                 fila["scraping_estado"] = r.get("estado", "ok")
                 fila["n_ofertas"] = r.get("ofertas", 0)
                 fila["n_archivos"] = r.get("archivos", 0)
+                if args.reparar and r.get("estado") == "ok":
+                    fila["n_archivos"] = recontar_archivos(SALIDA / (r.get("codigo") or codigo))
             except Exception as e:
                 print(f"   ❌ error: {str(e)[:60]}")
                 fila["scraping_estado"] = f"error: {str(e)[:40]}"
