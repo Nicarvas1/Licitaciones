@@ -163,6 +163,17 @@ class ExtractorIATest(unittest.TestCase):
             "Smart TV con modo PC": None,
             "Toner para impresora HP": None,
             "Servicio de instalacion": None,
+            "Carro de carga y transporte para 45 NOTEBOOK": None,
+            "Carro Tecnológico para Notebook E4U": None,
+            "Escáner Epson DS-530II": None,
+            "UPS Interactiva 1600VA": None,
+            "Kensington Maletín carga superior para notebook": None,
+            "Impresora multifuncional con escáner": "impresora",
+            "IMPRESORAS MULTIFUNCIONAL INYECCIÓN A TINTA": "impresora",
+            "Monitor 24 pulgadas con cable HDMI": "monitor",
+            "Server ThinkSystem SR630 V3": None,
+            "MacBook Pro de 14 pulgadas 24 GB de RAM SSD 512 GB": "equipo",
+            "HP ZBOOK POWER G11 16IN 32GB 1TB SSD KENSINGTON CABLE": "equipo",
         }
         for descripcion, esperado in casos.items():
             with self.subTest(descripcion=descripcion):
@@ -352,6 +363,144 @@ class ExtractorIATest(unittest.TestCase):
             for producto in validados
         ))
 
+    def test_normaliza_marcas_y_descarta_fabricantes_de_componentes(self):
+        self.assertEqual(extractor.normalizar_marca("Hewlett Packard"), "HP")
+        self.assertEqual(extractor.normalizar_marca("OZXEN by Exact"), "OZXEN")
+        self.assertIsNone(extractor.normalizar_marca("AMD"))
+        self.assertIsNone(extractor.normalizar_marca("Intel"))
+        self.assertEqual(extractor.normalizar_marca("Lenovo"), "Lenovo")
+
+    def test_lineas_genericas_distintas_no_son_conflicto(self):
+        base = {"categoria": "equipo", "marca": "HP", "precio_total_tipo": "linea",
+                "confianza": "alta", "archivo_fuente": "a.pdf"}
+        productos = [
+            {**base, "producto": "Notebook", "cantidad": 2, "precio_unitario": 650000, "precio_total": 1300000},
+            {**base, "producto": "Notebook", "cantidad": 2, "precio_unitario": 600000, "precio_total": 1200000},
+        ]
+        validados = extractor.validar_productos(productos, productos, None)
+        self.assertFalse(any("conflicto" in a for p in validados for a in p["alertas"]))
+
+    def test_item_repetido_en_anexos_distintos_no_es_conflicto(self):
+        base = {"categoria": "equipo", "marca": "HP", "item": "1", "precio_total_tipo": "linea",
+                "confianza": "alta"}
+        productos = [
+            {**base, "producto": "Notebook HP ProBook 450 G10 i7 16GB", "cantidad": 10,
+             "precio_unitario": 900000, "precio_total": 9000000},
+            {**base, "producto": "Desktop Lenovo ThinkCentre M70 i5 8GB", "cantidad": 3,
+             "precio_unitario": 700000, "precio_total": 2100000},
+        ]
+        validados = extractor.validar_productos(productos, productos, None)
+        self.assertFalse(any("conflicto" in a for p in validados for a in p["alertas"]))
+
+    def test_mismo_modelo_en_items_distintos_no_es_conflicto(self):
+        base = {"categoria": "equipo", "marca": "HP", "producto": "Notebook HP 14-EP0130LA",
+                "modelo": "14-EP0130LA", "precio_unitario": 402000, "precio_total_tipo": "linea",
+                "confianza": "alta"}
+        productos = [
+            {**base, "item": "Item 4", "cantidad": 1, "precio_total": 402000},
+            {**base, "item": "6", "cantidad": 4, "precio_total": 1608000},
+        ]
+        validados = extractor.validar_productos(productos, productos, None)
+        self.assertFalse(any("conflicto" in a for p in validados for a in p["alertas"]))
+
+    def _bloque_economico(self, *filas):
+        texto = chr(10).join(f"FILA {i}: {f}" for i, f in enumerate(filas, 1))
+        return [{"archivo": "economico__01__oferta.pdf", "pagina": 1, "texto": texto}]
+
+    def test_rescata_fila_economica_y_completa_ficha_tecnica_unica(self):
+        bloques = self._bloque_economico(
+            "Item || Descripcion || Cantidad || Unitario || Total",
+            "Linea 1 || Notebook Tipo 1 || 6 || 567.760 || 3.406.560",
+            "Linea 2 || Despacho || 1 || 50.000 || 50.000",
+        )
+        tecnico = {"producto": "HP 250 G10 Notebook PC", "marca": "HP", "categoria": "equipo",
+                   "archivo_fuente": "tecnico__01__ficha.pdf"}
+        resultado = extractor.rescatar_filas_economicas([dict(tecnico)], [tecnico], bloques, "Prov", "1-9")
+        self.assertEqual(len(resultado), 1)
+        self.assertEqual(resultado[0]["precio_unitario"], 567760)
+        self.assertEqual(resultado[0]["cantidad"], 6)
+        self.assertEqual(resultado[0]["marca"], "HP")
+        self.assertTrue(resultado[0]["rescatado_fila_economica"])
+
+    def test_rescata_fila_como_producto_nuevo_sin_inventar_marca(self):
+        bloques = self._bloque_economico(
+            "Linea 1 || Notebook Tipo 1 || 6 || 567.760 || 3.406.560",
+        )
+        parciales = [
+            {"producto": "Notebook HP 250", "marca": "HP", "categoria": "equipo"},
+            {"producto": "Notebook Lenovo V14", "marca": "Lenovo", "categoria": "equipo"},
+        ]
+        resultado = extractor.rescatar_filas_economicas([], parciales, bloques, "Prov", "1-9")
+        self.assertEqual(len(resultado), 1)
+        self.assertIsNone(resultado[0]["marca"])
+        self.assertEqual(resultado[0]["proveedor"], "Prov")
+        validado = extractor.validar_productos(resultado, resultado, None)[0]
+        self.assertTrue(validado["rescatado_fila_economica"])
+        self.assertIn("marca_no_identificada", validado["alertas"])
+        self.assertNotEqual(validado["estado_validacion"], "ok")
+
+    def test_no_rescata_fila_ya_representada_ni_fuera_de_alcance(self):
+        bloques = self._bloque_economico(
+            "Linea 1 || Notebook HP 250 G10 || 6 || 567.760 || 3.406.560",
+            "Linea 2 || Carro de carga para notebooks || 1 || 1.360.000 || 1.360.000",
+        )
+        existente = [{"producto": "Notebook HP 250 G10", "marca": "HP", "categoria": "equipo",
+                      "cantidad": 6, "precio_unitario": 567760, "precio_total": 3406560}]
+        resultado = extractor.rescatar_filas_economicas(existente, existente, bloques, "P", "1")
+        self.assertEqual(len(resultado), 1)
+
+    def test_reconstruye_cifras_partidas_por_espacios_solo_si_cuadran(self):
+        lineas = [
+            "1   Notebook HP 15-FC0043LA                 3 89.318 6    2 .335.908",
+            "1    ALL IN ONE INTEL CORE I5, 8GB RAM, 512GB SSD, W11P 6 75.620 1 0 6 .756.200",
+            "3    IMPRESORA MULTIFUNCIONAL COLOR A3    9 07.553  4    3 .630.212",
+            "MacBook                                 3    2309000         6.927.000",
+            "Total neto del servicio 3 .719.000 706.610 4.425.610",
+            "Garantia de seriedad de la oferta 5 000 000 3 12 6",
+        ]
+        bloques = [{"archivo": "economico__01.pdf", "pagina": 1, "texto": chr(10).join(lineas)}]
+        filas = extractor.filas_precio_texto_libre(bloques)
+        self.assertEqual(
+            [(f["cantidad"], f["precio_unitario"], f["precio_total"]) for f in filas],
+            [(6, 389318, 2335908), (10, 675620, 6756200), (4, 907553, 3630212), (3, 2309000, 6927000)],
+        )
+
+    def test_detecta_texto_ilegible_de_pdf_con_columnas_rotadas(self):
+        basura = "2 PPMBDCSEPGDSCF A x u ra a oe a io p i ris e s s o c a n n t n ng nt p m e e e e c n e u c t t e e l a r al i m re o c c e a o io o sl l i a t t n l l r d u n a a a a i i i v v M s l ta ad t a i d e o i i g i R d o d e m d " * 4
+        normal = "Notebook HP 250 G10 con procesador Intel Core i7 de decima tercera generacion y 16 GB de memoria RAM " * 5
+        self.assertTrue(extractor.texto_ilegible(basura))
+        self.assertFalse(extractor.texto_ilegible(normal))
+        self.assertFalse(extractor.texto_ilegible("HP 15 G10"))
+
+    def test_precio_implausible_queda_inconsistente(self):
+        base = {"categoria": "equipo", "marca": "HP", "producto": "Notebook HP ProBook 430 G5",
+                "cantidad": 1, "precio_total_tipo": "linea", "confianza": "alta"}
+        for unitario in (753, 103_588_000):
+            with self.subTest(unitario=unitario):
+                producto = {**base, "precio_unitario": unitario, "precio_total": unitario}
+                validado = extractor.validar_productos([producto], [producto], None)[0]
+                self.assertIn("precio_unitario_fuera_de_rango", validado["alertas"])
+                self.assertEqual(validado["estado_validacion"], "inconsistente")
+
+    def test_unitario_mayor_que_total_de_la_oferta_es_inconsistente(self):
+        producto = {"categoria": "equipo", "marca": "HP", "producto": "Computadores de escritorio",
+                    "cantidad": 1, "precio_unitario": 15_000_000, "precio_total": 15_000_000,
+                    "precio_total_tipo": "linea", "confianza": "alta"}
+        validado = extractor.validar_productos([producto], [producto], "$ 9.000.000")[0]
+        self.assertIn("precio_unitario_supera_total_oferta", validado["alertas"])
+        self.assertEqual(validado["estado_validacion"], "inconsistente")
+
+    def test_precio_copiado_a_otra_categoria_no_queda_ok(self):
+        base = {"marca": "X", "cantidad": 1, "precio_unitario": 3_607_260, "precio_total": 3_607_260,
+                "precio_total_tipo": "linea", "confianza": "alta"}
+        productos = [
+            {**base, "categoria": "equipo", "producto": "Computador ThinkStation P3 Tower"},
+            {**base, "categoria": "monitor", "producto": "Monitor Xiaomi A27QI"},
+        ]
+        validados = extractor.validar_productos(productos, productos, None)
+        self.assertTrue(all("precio_repetido_en_otra_categoria" in p["alertas"] for p in validados))
+        self.assertTrue(all(p["estado_validacion"] != "ok" for p in validados))
+
     def test_consolidacion_por_lotes_no_corta_registros(self):
         registros = [
             {"producto": f"Notebook {indice}", "categoria": "equipo", "evidencia": "x" * 80}
@@ -401,6 +550,7 @@ class ExtractorIATest(unittest.TestCase):
             extractor.generar_excel(
                 [{
                     "codigo": "1234-5-LE25",
+                    "nombre_licitacion": "Licitacion X",
                     "fecha_publicacion": "2025-11-01",
                     "proveedor": "Proveedor",
                     "producto": "Notebook HP",
@@ -424,18 +574,21 @@ class ExtractorIATest(unittest.TestCase):
             self.assertEqual(
                 list(next(hoja.iter_rows(min_row=1, max_row=1, values_only=True))),
                 [
-                    "Licitación", "Fecha licitación", "Proveedor", "Producto", "Marca producto",
-                    "Cantidad", "Precio unitario", "Precio total", "Fuente de información",
+                    "ID licitación", "Nombre licitación", "Fecha licitación", "Proveedor", "Producto ofertado",
+                    "Tipo de producto", "Marca producto", "Cantidad", "Precio unitario", "Precio total",
+                    "Fuente de información", "Estado validación", "Alertas",
+                    "Cobertura documental", "Motivo cobertura",
                 ],
             )
             fila = list(next(hoja.iter_rows(min_row=2, max_row=2, values_only=True)))
-            self.assertEqual(tuple(fila[0:8]), (
-                "1234-5-LE25", "2025-11-01", "Proveedor", "Notebook HP", "HP", 2, 500000, 1000000,
+            self.assertEqual(tuple(fila[0:10]), (
+                "1234-5-LE25", "Licitacion X", "2025-11-01", "Proveedor", "Notebook HP", "notebook", "HP",
+                2, 500000, 1000000,
             ))
-            self.assertIn("Producto: ficha.pdf (p. 2)", fila[8])
-            self.assertIn("Precio: oferta.pdf (p. 3)", fila[8])
-            self.assertIn("Marca: ficha.pdf (p. 2)", fila[8])
-            self.assertNotIn("Respaldo:", fila[8])
+            self.assertIn("Producto: ficha.pdf (p. 2)", fila[10])
+            self.assertIn("Precio: oferta.pdf (p. 3)", fila[10])
+            self.assertIn("Marca: ficha.pdf (p. 2)", fila[10])
+            self.assertNotIn("Respaldo:", fila[10])
             libro.close()
 
     def test_prompt_proveedor_formatea_y_pide_reconstruir_tablas(self):
