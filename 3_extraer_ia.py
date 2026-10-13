@@ -480,6 +480,42 @@ def extraer_pdf(path, max_paginas, usar_ocr=False, tesseract_cmd=None, idioma_oc
     return "", "necesita_ocr"
 
 
+def encontrar_antiword():
+    """antiword (viene con Git for Windows) lee los .doc antiguos de Word."""
+    ruta = shutil.which("antiword")
+    if ruta:
+        return ruta
+    for candidato in (r"C:\Program Files\Git\mingw64\bin\antiword.exe", r"C:\Program Files\Git\usr\bin\antiword.exe"):
+        if os.path.isfile(candidato):
+            return candidato
+    return None
+
+
+def extraer_doc(path):
+    """Documento Word antiguo (.doc): texto con antiword. Sin antiword queda como no soportado."""
+    antiword = encontrar_antiword()
+    if not antiword:
+        return "", "no_soportado"
+    temporal = None
+    ruta = str(path)
+    try:
+        if len(ruta) > 240:  # antiword no entiende el prefijo de rutas largas: se trabaja sobre una copia
+            import tempfile
+            temporal = Path(tempfile.gettempdir()) / f"antiword_{os.getpid()}_{abs(hash(ruta))}.doc"
+            shutil.copyfile(ruta_sistema(path), temporal)
+            ruta = str(temporal)
+        resultado = subprocess.run([antiword, ruta], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return "", "no_soportado"
+    finally:
+        if temporal is not None:
+            temporal.unlink(missing_ok=True)
+    if resultado.returncode != 0:
+        return "", "no_soportado"
+    texto = limpiar_control(resultado.stdout.decode("cp1252", errors="replace")).strip()
+    return (texto, "texto") if len(texto) > 20 else ("", "vacio")
+
+
 def extraer_docx(path):
     try:
         doc = Document(ruta_sistema(path))
@@ -597,6 +633,8 @@ def extraer_archivo(path, args, detalle=None):
         return "", "imagen" if getattr(args, "vision", False) else "no_soportado"
     if extension == ".docx":
         return extraer_docx(path)
+    if extension == ".doc":
+        return extraer_doc(path)
     if extension in (".xlsx", ".xlsm"):
         return extraer_excel(path, args.max_filas_excel, args.max_columnas_excel)
     if extension in (".txt", ".csv", ".tsv"):
@@ -1340,7 +1378,12 @@ def normalizar_marca(marca):
     if not texto:
         return None
     clave = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii").lower()
-    if clave in MARCAS_NO_VALIDAS or re.fullmatch(r"(?:marca\s+)?(?:generic[oa]s?|sin marca|no (?:indica|especifica)\w*)", clave):
+    if clave in MARCAS_NO_VALIDAS or re.fullmatch(r"(?:marca\s+)?(?:generic[oa]?s?|sin marca|no (?:indica|especifica)\w*)", clave):
+        return None
+    partes = [parte for parte in re.split(r"\s*[/+,]\s*|\s+y\s+", clave) if parte]
+    if len(partes) > 1:
+        # "Lenovo/HP", "Asus/MSI/Logitech": varias marcas en un campo (componentes de un equipo armado o
+        # lectura ambigua). Ninguna es "la" marca: se deja vacia y la inferencia por descripcion decide.
         return None
     return MARCAS_ALIAS.get(clave) or MARCAS_CONOCIDAS.get(clave, texto)
 
