@@ -468,6 +468,13 @@ def main():
                 codigo = ejecutar(comando, carpeta, log)
                 if codigo != 0:
                     fallos.append(f"{mes}: scraper termino con codigo {codigo}")
+                else:
+                    # Segunda pasada: completa lo que el portal entrego de forma intermitente (anexos que no
+                    # cargaron, grillas vacias, popups paginados). Solo baja lo que falta.
+                    reparar = [sys.executable, str(SCRIPT_SCRAPER), "--csv", "para_scrapear.csv", "--reparar"]
+                    codigo = ejecutar(reparar, carpeta, log)
+                    if codigo != 0:
+                        fallos.append(f"{mes}: la reparacion del scraping termino con codigo {codigo}")
             elif not args.omitir_scraping:
                 print(f"{mes}: scraping ya completo; no se abre Chromium")
 
