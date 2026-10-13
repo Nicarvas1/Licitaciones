@@ -1,0 +1,79 @@
+{
+ "4469-176-L126": {
+  "76.596.570-5": [
+   {
+    "tipo": "all-in-one",
+    "marca": "Lenovo",
+    "cantidad": 1,
+    "precio_unitario": 664950,
+    "precio_total": 664950
+   }
+  ],
+  "77.415.422-1": [
+   {
+    "tipo": "all-in-one",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 644538,
+    "precio_total": 644538
+   }
+  ],
+  "77.741.502-6": [
+   {
+    "tipo": "all-in-one",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 2350000,
+    "precio_total": 2350000
+   }
+  ]
+ },
+ "1145-6-LE26": {
+  "76.450.543-3": [
+   {
+    "tipo": "*",
+    "marca": "HP",
+    "cantidad": 8,
+    "precio_unitario": 952020,
+    "precio_total": 7616160
+   },
+   {
+    "tipo": "*",
+    "marca": "Lenovo",
+    "cantidad": 15,
+    "precio_unitario": 2076574,
+    "precio_total": 31148610
+   },
+   {
+    "tipo": "*",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 1176480,
+    "precio_total": 2352960
+   },
+   {
+    "tipo": "*",
+    "marca": "HP",
+    "cantidad": 10,
+    "precio_unitario": 1001035,
+    "precio_total": 10010350
+   }
+  ],
+  "76.791.475-K": [
+   {
+    "tipo": "desktop",
+    "marca": "ASUS",
+    "cantidad": 8,
+    "precio_unitario": 1237530,
+    "precio_total": 9900420
+   },
+   {
+    "tipo": "workstation",
+    "marca": "ASUS",
+    "cantidad": 2,
+    "precio_unitario": 1521260,
+    "precio_total": 3042520
+   }
+  ]
+ }
+}

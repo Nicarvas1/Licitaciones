@@ -25,6 +25,7 @@ Devuelve SOLO JSON valido:
       "precio_total_tipo": "linea|oferta|null",
       "moneda": "CLP|USD|UTM|null",
       "categoria": "equipo|monitor|impresora|null",
+      "tipo": "notebook|all-in-one|desktop|workstation|monitor|impresora|null",
       "pagina": null,
       "fila_fuente": null,
       "evidencia": "fragmento literal breve de la fila",
@@ -52,6 +53,7 @@ REGLAS:
 - Las filas con || conservan columnas. Si la tabla esta aplanada, reconstruyela
   con encabezados y contexto, sin mezclar valores de items distintos. Si faltan
   elementos para distinguir las columnas, deja el dato dudoso en null.
+- "tipo" es el tipo de equipo (laptop = notebook; AIO = all-in-one; torre/SFF/mini PC = desktop).
 - Indica pagina/fila y evidencia literal breve de los valores.
 - Si no hay productos, devuelve {{"productos": [], "observaciones": "motivo"}}.
 - Solo computadores, notebook/laptop/portatil, desktop/PC, all-in-one/AIO,
@@ -70,6 +72,19 @@ PISTAS DE PRECIOS:
 TEXTO DEL ARCHIVO:
 {texto}
 '''
+
+# Variante con salida corta: sin evidencia literal, fila ni confianza (menos tokens generados = mas rapido).
+_ESQUEMA_COMPLETO = PROMPT_ARCHIVO[PROMPT_ARCHIVO.index("Devuelve SOLO JSON valido:"):PROMPT_ARCHIVO.index("REGLAS:")]
+_ESQUEMA_COMPACTO = (
+    "Devuelve SOLO JSON valido:\n"
+    '{{"productos":[{{"item":null,"producto":"","marca":null,"modelo":null,"cantidad":null,'
+    '"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora",'
+    '"tipo":"notebook|all-in-one|desktop|workstation|monitor|impresora","pagina":null}}],'
+    '"observaciones":null}}\n'
+    "precio_total es SIEMPRE el total de esa misma linea (nunca IVA, subtotal ni total general).\n\n")
+PROMPT_ARCHIVO_COMPACTO = (
+    PROMPT_ARCHIVO.replace(_ESQUEMA_COMPLETO, _ESQUEMA_COMPACTO)
+    .replace("- Indica pagina/fila y evidencia literal breve de los valores.\n", "- Indica la pagina.\n"))
 
 PROMPT_CONSOLIDAR = r'''Eres un reconciliador de resultados extraidos de documentos de una misma oferta.
 Une registros que representan el mismo item o producto. Los datos tecnicos pueden
@@ -94,6 +109,7 @@ Devuelve SOLO JSON valido:
       "precio_total_tipo": "linea|oferta|null",
       "moneda": "CLP|USD|UTM|null",
       "categoria": "equipo|monitor|impresora|null",
+      "tipo": "notebook|all-in-one|desktop|workstation|monitor|impresora|null",
       "fuente_producto": "archivo o null",
       "fuente_precio": "archivo o null",
       "pagina_producto": null,
@@ -166,7 +182,7 @@ PROVEEDOR: {proveedor}
 TOTAL DE OFERTA (solo referencia; no asignarlo a productos): {total_oferta}
 
 Devuelve SOLO este JSON, sin texto adicional:
-{{"productos":[{{"item":null,"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","archivo_producto":null,"pagina_producto":null,"archivo_precio":null,"pagina_precio":null}}]}}
+{{"productos":[{{"item":null,"producto":"","marca":null,"modelo":null,"cantidad":null,"precio_unitario":null,"precio_total":null,"categoria":"equipo|monitor|impresora","tipo":"notebook|all-in-one|desktop|workstation|monitor|impresora","archivo_producto":null,"pagina_producto":null,"archivo_precio":null,"pagina_precio":null}}]}}
 
 Extrae solo computadores, notebooks, desktop/PC, all-in-one, workstations, monitores e impresoras;
 excluye accesorios, servicios, TV, tablets, servidores y redes. Combina anexos solo si el item

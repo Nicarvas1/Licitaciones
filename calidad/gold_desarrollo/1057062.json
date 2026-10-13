@@ -1,0 +1,85 @@
+{
+ "1057062-13-LE25": {
+  "76.080.334-0": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 30,
+    "precio_unitario": 803243,
+    "precio_total": 24097290
+   }
+  ],
+  "76.244.740-1": [
+   {
+    "tipo": "notebook",
+    "marca": "Acer",
+    "cantidad": 30,
+    "precio_unitario": 930000,
+    "precio_total": 27900000
+   }
+  ],
+  "76.596.570-5": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 30,
+    "precio_unitario": 778500,
+    "precio_total": 23355000
+   }
+  ],
+  "77.072.745-6": [
+   {
+    "tipo": "notebook",
+    "marca": "*",
+    "cantidad": 30,
+    "precio_unitario": 823521,
+    "precio_total": 24705630
+   }
+  ],
+  "77.474.803-2": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 30,
+    "precio_unitario": 785175,
+    "precio_total": 23555750
+   }
+  ],
+  "77.624.823-1": [
+   {
+    "tipo": "notebook",
+    "marca": "ASUS",
+    "cantidad": 30,
+    "precio_unitario": 807133,
+    "precio_total": 24213990
+   }
+  ],
+  "77.741.502-6": [
+   {
+    "tipo": "notebook",
+    "marca": "Lenovo",
+    "cantidad": 30,
+    "precio_unitario": 1300000,
+    "precio_total": 39000000
+   }
+  ],
+  "96.504.550-3": [
+   {
+    "tipo": "notebook",
+    "marca": "Lenovo",
+    "cantidad": 30,
+    "precio_unitario": 854700,
+    "precio_total": 25641000
+   }
+  ],
+  "96.678.350-8": [
+   {
+    "tipo": "notebook",
+    "marca": "ASUS",
+    "cantidad": 30,
+    "precio_unitario": 617576,
+    "precio_total": 18527280
+   }
+  ]
+ }
+}

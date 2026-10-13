@@ -1,0 +1,48 @@
+{
+ "4469-153-LE26": {
+  "76.677.846-1": [
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 19413000,
+    "precio_total": 19413000
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "Apple",
+    "cantidad": 1,
+    "precio_unitario": 2328000,
+    "precio_total": 2328000
+   },
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 8587000,
+    "precio_total": 8587000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 1023000,
+    "precio_total": 2046000
+   },
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 4270000,
+    "precio_total": 4270000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 1,
+    "precio_unitario": 1924000,
+    "precio_total": 1924000
+   }
+  ]
+ }
+}

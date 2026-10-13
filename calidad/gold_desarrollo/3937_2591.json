@@ -1,0 +1,164 @@
+{
+ "3937-18-L125": {
+  "76.596.570-5": [
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 269900,
+    "precio_total": 269900
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 346000,
+    "precio_total": 346000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 4,
+    "precio_unitario": 346000,
+    "precio_total": 1384000
+   },
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 205900,
+    "precio_total": 411800
+   }
+  ],
+  "76.924.082-9": [
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 385000,
+    "precio_total": 385000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 402000,
+    "precio_total": 402000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 4,
+    "precio_unitario": 402000,
+    "precio_total": 1608000
+   },
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 236000,
+    "precio_total": 472000
+   }
+  ],
+  "77.705.058-3": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 4,
+    "precio_unitario": 421913,
+    "precio_total": 1687652
+   },
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 199547,
+    "precio_total": 399094
+   },
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 368541,
+    "precio_total": 368541,
+    "ambiguo": true
+   }
+  ]
+ },
+ "2591-160-LP25": {
+  "76.872.717-1": [
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 99,
+    "precio_unitario": 877856,
+    "precio_total": 86907744
+   },
+   {
+    "tipo": "notebook",
+    "marca": "ASUS",
+    "cantidad": 11,
+    "precio_unitario": 1184753,
+    "precio_total": 13032283
+   },
+   {
+    "tipo": "desktop",
+    "marca": "ASUS",
+    "cantidad": 17,
+    "precio_unitario": 2148277,
+    "precio_total": 36520709
+   },
+   {
+    "tipo": "notebook",
+    "marca": "ASUS",
+    "cantidad": 2,
+    "precio_unitario": 2236927,
+    "precio_total": 4473854
+   }
+  ],
+  "96.609.940-2": [
+   {
+    "tipo": "all-in-one",
+    "marca": "Dell",
+    "cantidad": 99,
+    "precio_unitario": 1178632,
+    "precio_total": 116684568
+   },
+   {
+    "tipo": "*",
+    "marca": "Dell",
+    "cantidad": 11,
+    "precio_unitario": 1537682,
+    "precio_total": 16914502
+   },
+   {
+    "tipo": "*",
+    "marca": "Dell",
+    "cantidad": 17,
+    "precio_unitario": 1968492,
+    "precio_total": 33464364
+   },
+   {
+    "tipo": "*",
+    "marca": "Dell",
+    "cantidad": 2,
+    "precio_unitario": 4402165,
+    "precio_total": 8804330
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Brother",
+    "cantidad": 6,
+    "precio_unitario": 688237,
+    "precio_total": 4129422
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Brother",
+    "cantidad": 58,
+    "precio_unitario": 212982,
+    "precio_total": 12352956
+   }
+  ]
+ }
+}

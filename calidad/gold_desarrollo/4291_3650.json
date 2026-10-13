@@ -1,0 +1,37 @@
+{"4291-125-LE25": {
+ "13.953.712-2": [
+  {"tipo":"notebook","marca":"Apple","cantidad":2,"precio_unitario":967455,"precio_total":1934910},
+  {"tipo":"impresora","marca":"Brother","cantidad":1,"precio_unitario":201477,"precio_total":201477},
+  {"tipo":"all-in-one","marca":"HP","cantidad":1,"precio_unitario":768954,"precio_total":768954},
+  {"tipo":"notebook","marca":"HP","cantidad":2,"precio_unitario":549706,"precio_total":1099412},
+  {"tipo":"notebook","marca":"HP","cantidad":1,"precio_unitario":1081411,"precio_total":1081411},
+  {"tipo":"notebook","marca":"HP","cantidad":3,"precio_unitario":786474,"precio_total":2359422}],
+ "76.596.570-5": [
+  {"tipo":"all-in-one","marca":"HP","cantidad":1,"precio_unitario":580000,"precio_total":580000},
+  {"tipo":"impresora","marca":"Brother","cantidad":1,"precio_unitario":118900,"precio_total":118900},
+  {"tipo":"impresora","marca":"Canon","cantidad":1,"precio_unitario":115900,"precio_total":115900},
+  {"tipo":"notebook","marca":"HP","cantidad":2,"precio_unitario":599000,"precio_total":1198000},
+  {"tipo":"notebook","marca":"Lenovo","cantidad":1,"precio_unitario":607000,"precio_total":607000},
+  {"tipo":"notebook","marca":"HP","cantidad":3,"precio_unitario":599000,"precio_total":1797000},
+  {"tipo":"monitor","marca":"*","cantidad":1,"precio_unitario":1249875,"precio_total":1249875,"ambiguo":true}]
+},
+"3650-20-LE25": {
+ "76.596.570-5": [
+  {"tipo":"all-in-one","marca":"HP","cantidad":10,"precio_unitario":650000,"precio_total":6500000},
+  {"tipo":"all-in-one","marca":"Lenovo","cantidad":2,"precio_unitario":1160000,"precio_total":2320000},
+  {"tipo":"impresora","marca":"Epson","cantidad":4,"precio_unitario":630900,"precio_total":2523600},
+  {"tipo":"impresora","marca":"Epson","cantidad":3,"precio_unitario":224900,"precio_total":674700},
+  {"tipo":"notebook","marca":"HP","cantidad":5,"precio_unitario":587000,"precio_total":2935000}],
+ "77.072.745-6": [
+  {"tipo":"all-in-one","marca":"*","cantidad":10,"precio_unitario":675620,"precio_total":6756200},
+  {"tipo":"all-in-one","marca":"*","cantidad":2,"precio_unitario":1250410,"precio_total":2500820},
+  {"tipo":"impresora","marca":"*","cantidad":4,"precio_unitario":907553,"precio_total":3630212},
+  {"tipo":"impresora","marca":"*","cantidad":3,"precio_unitario":322679,"precio_total":968037},
+  {"tipo":"notebook","marca":"*","cantidad":5,"precio_unitario":605032,"precio_total":3025160}],
+ "77.646.099-0": [
+  {"tipo":"all-in-one","marca":"HP","cantidad":10,"precio_unitario":810000,"precio_total":8100000},
+  {"tipo":"all-in-one","marca":"*","cantidad":2,"precio_unitario":1610000,"precio_total":3220000},
+  {"tipo":"impresora","marca":"*","cantidad":4,"precio_unitario":250000,"precio_total":1000000},
+  {"tipo":"impresora","marca":"*","cantidad":3,"precio_unitario":190000,"precio_total":570000},
+  {"tipo":"notebook","marca":"*","cantidad":5,"precio_unitario":600000,"precio_total":3000000}]
+}}

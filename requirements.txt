@@ -10,6 +10,3 @@ Pillow==12.3.0
 requests==2.34.2
 python-docx==1.2.0
 openpyxl==3.1.5
-
-# Pruebas opcionales con la API de OpenAI
-openai==3.11.0

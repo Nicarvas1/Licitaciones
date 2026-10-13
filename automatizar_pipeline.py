@@ -402,6 +402,12 @@ def main():
                         help="Tamano de cada fragmento de texto enviado al modelo")
     parser.add_argument("--ocr", action="store_true",
                         help="Aplica OCR a PDF sin texto extraible")
+    parser.add_argument("--rapido", action="store_true",
+                        help="preset recomendado: --prompt-compacto y --sin-consolidar")
+    parser.add_argument("--prompt-compacto", action="store_true",
+                        help="salida corta del modelo (sin evidencia literal): mas rapido")
+    parser.add_argument("--sin-filtro-tecnicos", action="store_true",
+                        help="envia al modelo todos los anexos tecnicos, aun sin senales de equipos")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--desde", help="Primer mes incluido, formato YYYY-MM")
     parser.add_argument("--hasta", help="Ultimo mes incluido, formato YYYY-MM")
@@ -502,6 +508,12 @@ def main():
                             "--max-imagenes-proveedor", str(args.max_imagenes_proveedor)]
             if args.ocr:
                 comando.append("--ocr")
+            if args.rapido:
+                comando.append("--rapido")
+            if args.prompt_compacto:
+                comando.append("--prompt-compacto")
+            if args.sin_filtro_tecnicos:
+                comando.append("--sin-filtro-tecnicos")
             if args.debug:
                 comando.append("--debug")
             if args.sin_consolidar:
@@ -533,4 +545,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()

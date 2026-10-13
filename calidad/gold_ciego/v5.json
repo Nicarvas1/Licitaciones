@@ -1,0 +1,204 @@
+{
+ "2906-17-LE26": {
+  "76.095.533-7": [
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 10,
+    "precio_unitario": 950484,
+    "precio_total": 9504840
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 3,
+    "precio_unitario": 274711,
+    "precio_total": 824133
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 704425,
+    "precio_total": 1408850
+   }
+  ],
+  "76.484.316-9": [
+   {
+    "tipo": "all-in-one",
+    "marca": "*",
+    "cantidad": 10,
+    "precio_unitario": 520000,
+    "precio_total": 5200000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 3,
+    "precio_unitario": 245000,
+    "precio_total": 735000
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 665000,
+    "precio_total": 1330000
+   }
+  ],
+  "76.891.378-1": [
+   {
+    "tipo": "all-in-one",
+    "marca": "Lenovo",
+    "cantidad": 10,
+    "precio_unitario": 526486,
+    "precio_total": 5264860
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 3,
+    "precio_unitario": 214555,
+    "precio_total": 643665
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 819000,
+    "precio_total": 1638000
+   }
+  ],
+  "76.924.082-9": [
+   {
+    "tipo": "all-in-one",
+    "marca": "Lenovo",
+    "cantidad": 10,
+    "precio_unitario": 863000,
+    "precio_total": 8630000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 3,
+    "precio_unitario": 295000,
+    "precio_total": 885000
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 1364000,
+    "precio_total": 2728000
+   }
+  ],
+  "77.413.797-1": [
+   {
+    "tipo": "all-in-one",
+    "marca": "*",
+    "cantidad": 10,
+    "precio_unitario": 500000,
+    "precio_total": 5000000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 3,
+    "precio_unitario": 265000,
+    "precio_total": 795000
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 798000,
+    "precio_total": 1596000
+   }
+  ],
+  "77.415.422-1": [
+   {
+    "tipo": "all-in-one",
+    "marca": "*",
+    "cantidad": 10,
+    "precio_unitario": 449874,
+    "precio_total": 4498740
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 3,
+    "precio_unitario": 177794,
+    "precio_total": 533382
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 653735,
+    "precio_total": 1307470
+   }
+  ],
+  "77.624.823-1": [
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 10,
+    "precio_unitario": 785705,
+    "precio_total": 7857050
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 3,
+    "precio_unitario": 221839,
+    "precio_total": 665517
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 720990,
+    "precio_total": 1441980
+   }
+  ],
+  "77.646.099-0": [
+   {
+    "tipo": "all-in-one",
+    "marca": "*",
+    "cantidad": 10,
+    "precio_unitario": 500000,
+    "precio_total": 5000000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 3,
+    "precio_unitario": 286000,
+    "precio_total": 858000
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 650000,
+    "precio_total": 1300000
+   }
+  ],
+  "78.128.416-5": [
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 10,
+    "precio_unitario": 755516,
+    "precio_total": 7555160
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 3,
+    "precio_unitario": 190696,
+    "precio_total": 572088
+   }
+  ]
+ }
+}

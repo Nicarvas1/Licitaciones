@@ -1,24 +1,27 @@
 # Secretos y configuracion local
 .env
 .env.*
-!.env.example
 
 # Entornos y cache de Python
 .venv/
+.venv_openai_prueba/
+.uv-cache-openai/
 venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Datos descargados y resultados locales
+# Datos descargados y resultados (no se versionan)
 ofertas/
 lotes/
+lotes_*/
 descargas/
-/Pruebas/
 _extraidos/
 _debug_ia/
+revision_*/
 *.pdf
 *.docx
+*.doc
 *.xlsx
 *.xls
 *.xlsm
@@ -27,8 +30,32 @@ _debug_ia/
 *.7z
 *.csv
 *.json
+*.jsonl
 *.html
 *.log
+
+# Corridas y pruebas locales
+/Pruebas/
+/pruebas_*/
+pruebas_calidad/
+/prueba_*/
+/copia_prueba/
+/tmp_validacion/
+/licitaciones_nov_nuevo/
+/licitaciones_datos/
+auditoria*.xlsx
+calidad/resultados_prueba/
+
+# Experimentos y herramientas locales fuera del pipeline
+/demo_app/
+/3_extraer_openai_prueba.py
+/3_extraer_reglas.py
+/openai_proveedor_benchmark.py
+/diagnostico_velocidad.py
+/prueba_extraccion_simple.py
+/test_*.py
+/tests/test_extractor_reglas.py
+/tests/test_openai_proveedor_benchmark.py
 
 # Archivos temporales del sistema y del editor
 .vscode/
@@ -36,3 +63,7 @@ _debug_ia/
 .DS_Store
 Thumbs.db
 ~$*
+
+# El gold (valores verificados a mano) si se versiona
+!calidad/gold_desarrollo/*.json
+!calidad/gold_ciego/*.json

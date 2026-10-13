@@ -1,0 +1,140 @@
+{
+ "5124-14-LE25": {
+  "76.080.334-0": [
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 3,
+    "precio_unitario": 679272,
+    "precio_total": 2037816
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 786468,
+    "precio_total": 1572936
+   }
+  ],
+  "76.596.570-5": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 6,
+    "precio_unitario": 593000,
+    "precio_total": 3558000
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "HP",
+    "cantidad": 10,
+    "precio_unitario": 650000,
+    "precio_total": 6500000
+   }
+  ],
+  "77.474.803-2": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 6,
+    "precio_unitario": 567760,
+    "precio_total": 3406560
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "HP",
+    "cantidad": 10,
+    "precio_unitario": 714400,
+    "precio_total": 7144000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 10,
+    "precio_unitario": 815920,
+    "precio_total": 8159200
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "HP",
+    "cantidad": 3,
+    "precio_unitario": 714400,
+    "precio_total": 2143200
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 1175000,
+    "precio_total": 2350000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 814980,
+    "precio_total": 814980
+   }
+  ],
+  "77.607.976-6": [
+   {
+    "tipo": "all-in-one",
+    "marca": "Lenovo",
+    "cantidad": 10,
+    "precio_unitario": 760000,
+    "precio_total": 7600000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "ASUS",
+    "cantidad": 10,
+    "precio_unitario": 1030000,
+    "precio_total": 10300000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "Lenovo",
+    "cantidad": 2,
+    "precio_unitario": 700000,
+    "precio_total": 1400000
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 3,
+    "precio_unitario": 500000,
+    "precio_total": 1500000
+   }
+  ],
+  "77.624.823-1": [
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 6,
+    "precio_unitario": 389318,
+    "precio_total": 2335908
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "HP",
+    "cantidad": 10,
+    "precio_unitario": 531755,
+    "precio_total": 5317550
+   },
+   {
+    "tipo": "all-in-one",
+    "marca": "ASUS",
+    "cantidad": 3,
+    "precio_unitario": 550747,
+    "precio_total": 1652241
+   },
+   {
+    "tipo": "notebook",
+    "marca": "HP",
+    "cantidad": 2,
+    "precio_unitario": 731167,
+    "precio_total": 1462334
+   }
+  ]
+ }
+}

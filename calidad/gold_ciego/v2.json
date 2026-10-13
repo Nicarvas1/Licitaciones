@@ -1,0 +1,175 @@
+{
+ "2464-17-LE26": {
+  "14.205.876-6": [
+   {
+    "tipo": "desktop",
+    "marca": "HP",
+    "cantidad": 22,
+    "precio_unitario": 450120,
+    "precio_total": 9902640
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 1397640,
+    "precio_total": 1397640
+   },
+   {
+    "tipo": "monitor",
+    "marca": "ViewSonic",
+    "cantidad": 14,
+    "precio_unitario": 66500,
+    "precio_total": 931000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Xiaomi",
+    "cantidad": 18,
+    "precio_unitario": 82660,
+    "precio_total": 1487880
+   },
+   {
+    "tipo": "monitor",
+    "marca": "*",
+    "cantidad": 5,
+    "precio_unitario": 146910,
+    "precio_total": 734550
+   }
+  ],
+  "76.473.108-5": [
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 22,
+    "precio_unitario": 450000,
+    "precio_total": 9900000
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 1240000,
+    "precio_total": 1240000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Lenovo",
+    "cantidad": 14,
+    "precio_unitario": 78000,
+    "precio_total": 1092000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "*",
+    "cantidad": 18,
+    "precio_unitario": 81000,
+    "precio_total": 1458000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 5,
+    "precio_unitario": 170000,
+    "precio_total": 850000
+   }
+  ],
+  "77.415.422-1": [
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 22,
+    "precio_unitario": 448767,
+    "precio_total": 9872874
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 1161324,
+    "precio_total": 1161324
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Lenovo",
+    "cantidad": 14,
+    "precio_unitario": 80635,
+    "precio_total": 1128890
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 18,
+    "precio_unitario": 81512,
+    "precio_total": 1467216
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 5,
+    "precio_unitario": 166529,
+    "precio_total": 832645
+   }
+  ],
+  "77.624.823-1": [
+   {
+    "tipo": "desktop",
+    "marca": "HP",
+    "cantidad": 22,
+    "precio_unitario": 470798,
+    "precio_total": 10357556
+   },
+   {
+    "tipo": "desktop",
+    "marca": "*",
+    "cantidad": 1,
+    "precio_unitario": 1428898,
+    "precio_total": 1428898
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Lenovo",
+    "cantidad": 14,
+    "precio_unitario": 91587,
+    "precio_total": 1282218
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 18,
+    "precio_unitario": 90672,
+    "precio_total": 1632096
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 5,
+    "precio_unitario": 202419,
+    "precio_total": 1012095
+   }
+  ],
+  "78.128.416-5": [
+   {
+    "tipo": "monitor",
+    "marca": "Dell",
+    "cantidad": 14,
+    "precio_unitario": 126871,
+    "precio_total": 1776194
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 18,
+    "precio_unitario": 89022,
+    "precio_total": 1602396
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 5,
+    "precio_unitario": 169667,
+    "precio_total": 848335
+   }
+  ]
+ }
+}

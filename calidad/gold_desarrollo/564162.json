@@ -1,0 +1,78 @@
+{
+ "564162-131-L125": {
+  "76.596.570-5": [
+   {
+    "tipo": "impresora",
+    "marca": "HP",
+    "cantidad": 1,
+    "precio_unitario": 196900,
+    "precio_total": 196900
+   },
+   {
+    "tipo": "notebook",
+    "marca": "Dell",
+    "cantidad": 1,
+    "precio_unitario": 995000,
+    "precio_total": 995000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 1,
+    "precio_unitario": 299950,
+    "precio_total": 299950
+   },
+   {
+    "tipo": "notebook",
+    "marca": "Lenovo",
+    "cantidad": 1,
+    "precio_unitario": 593000,
+    "precio_total": 593000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 1,
+    "precio_unitario": 299950,
+    "precio_total": 299950
+   }
+  ],
+  "77.607.976-6": [
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 1,
+    "precio_unitario": 345000,
+    "precio_total": 345000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "LG",
+    "cantidad": 1,
+    "precio_unitario": 350000,
+    "precio_total": 350000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "ASUS",
+    "cantidad": 1,
+    "precio_unitario": 1400000,
+    "precio_total": 1400000
+   },
+   {
+    "tipo": "monitor",
+    "marca": "Samsung",
+    "cantidad": 1,
+    "precio_unitario": 185000,
+    "precio_total": 185000
+   },
+   {
+    "tipo": "notebook",
+    "marca": "Lenovo",
+    "cantidad": 1,
+    "precio_unitario": 1070000,
+    "precio_total": 1070000
+   }
+  ]
+ }
+}

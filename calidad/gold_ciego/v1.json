@@ -1,0 +1,78 @@
+{
+ "463-2-LE26": {
+  "76.876.186-8": [
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 3580000,
+    "precio_total": 7160000
+   }
+  ],
+  "76.924.082-9": [
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 3780000,
+    "precio_total": 7560000
+   }
+  ],
+  "77.072.745-6": [
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 2,
+    "precio_unitario": 3554371,
+    "precio_total": 7108742
+   }
+  ],
+  "96.678.350-8": [
+   {
+    "tipo": "*",
+    "marca": "ASUS",
+    "cantidad": 2,
+    "precio_unitario": 3670074,
+    "precio_total": 7340148
+   }
+  ]
+ },
+ "1392-28-LE26": {
+  "76.104.326-9": [
+   {
+    "tipo": "*",
+    "marca": "Lenovo",
+    "cantidad": 6,
+    "precio_unitario": 12139809,
+    "precio_total": 72838854
+   }
+  ],
+  "77.415.422-1": [
+   {
+    "tipo": "*",
+    "marca": "Lenovo",
+    "cantidad": 6,
+    "precio_unitario": 4710084,
+    "precio_total": 28260504
+   }
+  ],
+  "A06912059": [
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 6,
+    "precio_unitario": 5848000,
+    "precio_total": 35088000
+   }
+  ],
+  "77.646.099-0": [
+   {
+    "tipo": "*",
+    "marca": "*",
+    "cantidad": 6,
+    "precio_unitario": 5800000,
+    "precio_total": 34800000
+   }
+  ]
+ }
+}

@@ -1,0 +1,148 @@
+{
+ "3604-33-LE25": {
+  "76.080.334-0": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2208315,
+    "precio_total": 6624945
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 350873,
+    "precio_total": 1052619
+   }
+  ],
+  "76.484.316-9": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2245000,
+    "precio_total": 6735000
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 333000,
+    "precio_total": 999000
+   }
+  ],
+  "76.596.570-5": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2025500,
+    "precio_total": 6076500
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 299900,
+    "precio_total": 899700
+   }
+  ],
+  "76.891.378-1": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2654775,
+    "precio_total": 7964325
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 371210,
+    "precio_total": 1113630
+   }
+  ],
+  "77.072.745-6": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2183141,
+    "precio_total": 6549423
+   },
+   {
+    "tipo": "impresora",
+    "marca": "*",
+    "cantidad": 3,
+    "precio_unitario": 372007,
+    "precio_total": 1116021
+   }
+  ],
+  "77.557.136-5": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2180511,
+    "precio_total": 6541533
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 366936,
+    "precio_total": 1100808
+   }
+  ],
+  "77.619.564-2": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2053212,
+    "precio_total": 6159636
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 333516,
+    "precio_total": 1000548
+   }
+  ],
+  "77.646.099-0": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2309000,
+    "precio_total": 6927000
+   },
+   {
+    "tipo": "impresora",
+    "marca": "*",
+    "cantidad": 3,
+    "precio_unitario": 359000,
+    "precio_total": 1077000
+   }
+  ],
+  "77.965.105-3": [
+   {
+    "tipo": "notebook",
+    "marca": "Apple",
+    "cantidad": 3,
+    "precio_unitario": 2033613,
+    "precio_total": 6100839
+   },
+   {
+    "tipo": "impresora",
+    "marca": "Epson",
+    "cantidad": 3,
+    "precio_unitario": 302521,
+    "precio_total": 907563
+   }
+  ]
+ }
+}

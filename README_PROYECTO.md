@@ -14,6 +14,9 @@ de escribirlos en Excel.
 
 ## Estado actual
 
+> **Configuracion recomendada**: modo `--por-proveedor` con `--paralelo 4` y `--ocr`; ver
+> "Configuracion recomendada y resultados medidos". Fue el mas rapido y el mas preciso en una prueba ciega.
+
 - La ruta principal validada es local: `3_extraer_ia.py` con LM Studio y
   `qwen/qwen3.6-35b-a3b`.
 - LM Studio usa su API compatible con OpenAI en
@@ -228,13 +231,22 @@ rehaciendo el proveedor completo. En la consola, cada proveedor revisado muestra
 
 ### 8. Excel final
 
-El extractor local genera cinco hojas:
+El extractor genera una hoja `Productos` (una fila por producto ofertado) con estas columnas:
 
-- `Productos`: todos los productos dentro del alcance, con evidencia y alertas;
-- `Productos_validos`: solamente registros con validacion `ok`;
-- `Alertas`: productos o proveedores que requieren revision;
-- `Consumo`: llamadas y tokens reportados por el backend;
-- `Resumen`: cobertura, productos, errores, OCR y no soportados por proveedor.
+| Columna | Contenido |
+|---|---|
+| ID licitación / Nombre licitación | código de Mercado Público y nombre de la licitación |
+| Fecha licitación | fecha de publicación |
+| Proveedor | oferente |
+| Producto ofertado | descripción del equipo tal como la ofertó el proveedor |
+| Tipo de producto | notebook, all-in-one, desktop, workstation, monitor o impresora |
+| Marca producto | fabricante del equipo (HP, Lenovo, ...), no de sus componentes |
+| Cantidad, Precio unitario, Precio total | valores netos de la misma línea |
+| Fuente de información | archivos y páginas de donde salió cada dato (producto, precio, marca) |
+| Estado validación / Alertas | `ok`, `revisar`, `incompleto` o `inconsistente` y el motivo |
+
+El "Tipo de producto" lo declara el modelo al leer el documento y, si falta, se infiere por reglas
+sobre la descripción. Para el análisis comercial filtrar `Estado validación = ok`.
 
 ## Componentes conservados
 
@@ -349,13 +361,10 @@ relacionados quedan fuera.
 
 El extractor procesa los archivos de un proveedor en orden y, con `--paralelo N`, varios proveedores a la vez. Los documentos
 largos se dividen en fragmentos con solapamiento para no perder filas ni aumentar
-el contexto de una sola llamada. El Excel contiene:
-
-- `Productos`: todos los productos dentro del alcance, con evidencia y alertas.
-- `Productos_validos`: solo registros completos y sin inconsistencias detectadas.
-- `Alertas`: filas o proveedores que requieren revision.
-- `Consumo`: llamadas y tokens reportados por LM Studio u Ollama.
-- `Resumen`: cobertura por proveedor, OCR y errores del modelo.
+el contexto de una sola llamada. El Excel tiene una hoja `Productos` (ver "8. Excel final"):
+una fila por producto con ID y nombre de licitacion, fecha, proveedor, producto, tipo de producto,
+marca, cantidad, precios, fuente de informacion y estado de validacion. El detalle por proveedor,
+consumo y errores queda en el log `.log.jsonl` y en `extraccion_ia.json`.
 
 Cada corrida también genera un archivo `.log.jsonl`. Si el equipo se reinicia,
 ejecuta nuevamente el mismo comando sin `--rehacer`; se conservan los proveedores
@@ -434,7 +443,7 @@ No usar `--pausa-licitacion` ni `--pausa-archivo` en la Z8.
 ### Prueba del extractor optimizado en la Z4
 
 Se conserva `3_extraer_ia.py`, sus checkpoints y el Excel simplificado de una
-hoja con nueve columnas. Los prompts por archivo y por proveedor piden reconstruir
+hoja (ahora con trece columnas, ver "8. Excel final"). Los prompts por archivo y por proveedor piden reconstruir
 tablas desordenadas o sin tabulaciones, sin mezclar datos de items distintos.
 El prompt por archivo se acorto y se compacta el relleno de espacios antes de
 dividir el texto para evitar fragmentos innecesarios.
@@ -660,56 +669,189 @@ Pruebas: `python -m unittest tests.test_extraer_reglas -v`
 
 ### Revision con evidencia (trazabilidad)
 
-`4_revisar_extraccion.py` genera una pagina HTML con una tarjeta por producto:
+`4_revisar_extraccion.py` genera una pagina HTML con una tarjeta por producto. Cada tarjeta responde
+tres preguntas: **que se extrajo, de donde salio cada dato y como se obtuvo**.
 
-- PDF: recorte de la pagina con la fila marcada en rojo y las celdas de cantidad
-  (azul), precio unitario (verde) y total (morado) resaltadas; el encabezado de
-  la tabla en gris y, si la descripcion venia de la linea anterior, esa linea en
-  naranja.
-- Excel / Word / CSV: fragmento de la planilla con la fila destacada, sus
-  encabezados y las filas vecinas.
-- Enlace para abrir el documento original (en la pagina correcta si es PDF).
-- Botones Correcto / Incorrecto / Dudoso y comentario. Se guardan en el navegador
-  y se exportan con "Exportar CSV".
+- **Tabla "De donde salio cada dato"**: para producto, marca, cantidad, precio unitario y total indica
+  el documento (anexo economico/tecnico), la pagina, como se leyo (texto, OCR, vision) y como se
+  obtuvo (leido por el modelo, fila verificada, marca tomada de otra ficha, cantidad inferida, etc.).
+- **Insignia de mezcla**: "un solo documento" o "⚠ combina N documentos" cuando el precio viene del
+  anexo economico y la marca/modelo de una ficha tecnica. Tambien avisa si el modelo cito archivos
+  que no existen. Hay un filtro "Documentos" para ver solo los productos que combinan documentos.
+- **Que hizo el extractor**: lista de pasos en lenguaje simple (lectura, consolidacion, rescate de
+  fila, validaciones).
+- **Evidencia visual por documento**: en el documento del precio, un recorte de la pagina con la
+  fila marcada en rojo y las celdas de cantidad (azul), unitario (verde) y total (morado); en la
+  ficha tecnica donde esta la marca/modelo, el texto marcado en amarillo. Para Excel/Word, el
+  fragmento de la planilla. Cada documento tiene su enlace "abrir" (en la pagina correcta).
+- Botones Correcto / Incorrecto / Dudoso con comentario; se guardan en el navegador y se exportan
+  a CSV (incluye `mezcla` y `documentos_usados`). La barra superior estima la precision con la
+  muestra aleatoria (IC 95%).
 
-En PDF, la fila se ubica buscando los montos del producto con PyMuPDF (la misma
-libreria que dibuja, asi que funciona tambien con paginas rotadas) y se verifica
-palabra por palabra. Si el precio aparece varias veces, se elige la linea que
-ademas contiene el total, la cantidad y palabras de la descripcion. Estados:
+Estados de ubicacion:
 
-- `fila verificada`: precio unitario, total y cantidad estan en la misma linea;
-- `datos no calzan con la fila`: se encontro el precio, pero la cantidad o el
-  total extraidos no estan en esa linea (datos mezclados de otra fila);
-- `precio NO encontrado`: el monto no aparece en el documento (error o PDF
-  escaneado).
-
-Los dos ultimos son los primeros que hay que revisar.
+- `fila verificada`: precio unitario, total y cantidad estan en la misma linea del documento;
+- `datos no calzan con la fila`: se encontro el precio pero la cantidad/total/modelo no estan en esa
+  linea (posible mezcla de filas);
+- `precio NO encontrado`: el monto no aparece en el documento (error o PDF escaneado).
 
 ```powershell
-# resultados por reglas (coordenadas exactas)
-.\.venv\Scripts\python.exe .\4_revisar_extraccion.py --dir ".\lotes\2025-11\ofertas"
-# resultados de la IA (ubicados buscando el precio en el documento)
 .\.venv\Scripts\python.exe .\4_revisar_extraccion.py --dir ".\lotes\2025-11\ofertas" --fuente ia
 ```
 
-Se crea `lotes\2025-11\revision_reglas\index.html` (o `revision_ia`), que se
-abre con doble clic en Chrome o Edge. Las imagenes quedan en la subcarpeta `img`.
+Crea `lotes\2025-11\revision_ia\index.html` (abrir con doble clic en Chrome o Edge). Forma sugerida
+de revisar: filtrar primero "Combina varios documentos" y los estados `datos no calzan`/`no encontrado`,
+luego revisar la muestra aleatoria y exportar el CSV.
 
-Forma sugerida de revisar:
+Pruebas: `python -m unittest tests.test_revisor_extraccion -v`
 
-1. Filtrar "Precio NO encontrado" y "Otro metodo: precio distinto": ahi se
-   concentran los errores.
-2. Activar "Solo muestra aleatoria" y revisar esas tarjetas (50 por defecto,
-   `--muestra` lo cambia). La barra superior estima la precision de todo el lote
-   con un intervalo de confianza del 95%.
-3. Exportar el CSV con las decisiones.
+## Configuracion recomendada y resultados medidos (prueba del 30-sep al 1-oct-2026)
 
-Las decisiones se guardan en el almacenamiento del navegador: se conservan al
-recargar, pero se pierden si se borra el historial o se usa otro navegador.
-Conviene exportar el CSV al terminar cada sesion. La columna `id_revision` del
-Excel de reglas coincide con el `id` del CSV.
+Se comparo cada modo contra valores verificados a mano (ver "Medir la calidad con un gold"):
+un set de desarrollo (10 licitaciones de noviembre, 102 productos) y un set **ciego** (8 licitaciones de
+otros meses elegidas al azar y no usadas para disenar reglas, 72 productos).
 
-Pruebas: `python -m unittest tests.test_revision -v`
+**Comando recomendado** (LM Studio con `qwen/qwen3.6-35b-a3b`, 4 proveedores en paralelo):
+
+```powershell
+.\.venv\Scripts\python.exe .\3_extraer_ia.py `
+  --dir ".\lotes\2025-11\ofertas" --backend lmstudio --modelo "qwen/qwen3.6-35b-a3b" `
+  --metadata-csv ".\lotes\2025-11\para_scrapear.csv" --excel ".\lotes\2025-11\resultado.xlsx" `
+  --por-proveedor --max-chars-proveedor 24000 --paralelo 4 --max-tokens 4096 --timeout 600 `
+  --reintentos-modelo 2 --ocr
+```
+
+En LM Studio cargar el modelo con **Max Concurrent Predictions = 4**. Con `automatizar_pipeline.py` usar
+las mismas opciones (`--por-proveedor --paralelo 4 --ocr`).
+
+| Prueba | Modo | Recall | Precision | Fiabilidad completa | `ok` correctos | s/proveedor |
+|---|---|---|---|---|---|---|
+| Ciega (72 prod.) | **por proveedor** | **98,6 %** | **91,0 %** | **97,2 %** | **96,7 %** | **44** |
+| Ciega (72 prod.) | por archivo `--rapido` | 98,6 % | 82,6 % | 93,1 % | 93,3 % | 61 |
+| Desarrollo, 4 licit. (63 prod.) | por proveedor | 100 % | 98,4 % | 100 % | 100 % | 45 |
+| Desarrollo, 4 licit. (63 prod.) | por archivo completo (consolidacion con el modelo) | 100 % | 98,4 % | 100 % | 98,4 % | 113 |
+| Desarrollo, 4 licit. (63 prod.) | por archivo compacto | 100 % | 98,4 % | 100 % | 98,4 % | 87 |
+| Desarrollo, 4 licit. (63 prod.) | por archivo `--rapido` | 100 % | 85,1 % | 100 % | 98,3 % | 57 |
+
+- *Recall*: productos reales recuperados. *Precision*: lo extraido que es real y esta en alcance (cuenta
+  tambien filas marcadas `incompleto` o `inconsistente`). *Fiabilidad completa*: productos con todos los
+  campos correctos (marca, tipo, cantidad, unitario, total). *`ok` correctos*: de los productos con estado
+  `ok`, cuantos son correctos (es lo que se usa para analisis).
+- Nota metodologica: las corridas A2/A3/A4/B3 y V3/V4 se re-evaluaron con las reglas finales de validacion
+  sobre sus mismos checkpoints (las reglas de codigo posteriores al modelo se pueden reaplicar sin volver a
+  llamarlo); la corrida de verificacion final de noviembre se hizo con todo el codigo ya integrado.
+- Para analisis comercial filtrar `Estado validacion = ok`; `revisar`, `incompleto` e `inconsistente` quedan
+  en el Excel con el motivo en `Alertas` para revisarlos con `4_revisar_extraccion.py`.
+- Por que el modo por proveedor gana: el tiempo lo domina lo que el modelo escribe (tokens de salida); una
+  sola llamada por proveedor con las paginas relevantes escribe menos y cruza economico y tecnico sin una
+  consolidacion posterior. El modo por archivo `--rapido` omite la consolidacion con el modelo y la hace por
+  codigo, pero deja mas filas duplicadas.
+- Lo que mas mejoro la calidad no fue el prompt sino las reglas de codigo posteriores al modelo (ver
+  "Que hace el pipeline para no perder ni mezclar informacion"): rescate de filas del anexo economico,
+  cifras partidas, IVA, marcas, descarte de ordenes de compra pasadas (experiencia), tipos y alcance.
+- Opciones nuevas: `--rapido` (= `--prompt-compacto` + `--sin-consolidar`, para el modo por archivo),
+  `--sin-filtro-tecnicos` (envia todos los anexos tecnicos), `--max-fragmentos-tecnico N` (tope de
+  fragmentos por anexo tecnico largo; 3 por defecto).
+- Limitaciones conocidas: ofertas con un solo precio global para varios equipos (kits) no se descomponen;
+  un anexo con las cantidades solo en el texto de las bases (p.ej. "dos centros de procesamiento") puede
+  quedar sin cantidad; documentos escaneados dependen de la calidad del OCR; si dos documentos del mismo
+  proveedor traen precios distintos para el mismo equipo se marca `inconsistente`.
+
+### Como repetir la prueba
+
+```powershell
+# 1. copia limpia de las licitaciones (no toca los lotes reales)
+.\.venv\Scripts\python.exe .\calidad\preparar_copia.py --origen lotes_z8\2025-11 --destino pruebas_calidad\A `
+  --licitaciones 5124-14-LE25 3604-33-LE25 4291-125-LE25 3650-20-LE25
+# 2. extraer (bash; repetir el mismo comando retoma lo pendiente)
+bash calidad/correr_prueba.sh A --por-proveedor --max-chars-proveedor 24000
+# 3. medir contra el gold
+.\.venv\Scripts\python.exe .\evaluar_calidad.py --dir pruebas_calidad\A\ofertas --gold calidad\gold_desarrollo
+```
+
+`calidad/gold_desarrollo` y `calidad/gold_ciego` contienen los valores verificados a mano (cada JSON:
+`{licitacion: {rut: [producto...]}}`). `calidad/hojas_de_lectura.py` genera, sin usar el modelo, una hoja de
+texto por licitacion con las lineas relevantes de cada anexo para construir un gold nuevo, y
+`calidad/bench_concurrencia.py` mide cuantas llamadas por minuto sostiene LM Studio con distinto paralelismo.
+
+## Medir la calidad con un gold (evaluar_calidad.py)
+
+Para saber si un cambio mejora o empeora la extraccion hay que medirlo contra valores verificados a
+mano, no a ojo. `evaluar_calidad.py` compara una corrida con un "gold": un JSON
+`{licitacion: {rut: [producto, ...]}}` donde cada producto trae tipo, marca, cantidad, precio
+unitario y total leidos del documento original. Un proveedor con lista vacia significa "no ofrece
+equipos del alcance" (cualquier producto extraido ahi es un falso positivo). Un item con
+`"ambiguo": true` no suma ni resta, y `"marca": "*"` o `"tipo": "*"` no se evaluan.
+
+```powershell
+.\.venv\Scripts\python.exe .\evaluar_calidad.py --dir ".\pruebas_calidad\A\ofertas" --gold ".\pruebas_calidad\gold"
+```
+
+Un producto gold se da por encontrado si la corrida tiene uno con el mismo precio unitario (+-1) y
+la misma cantidad. Sobre los encontrados mide marca, tipo, cantidad y total. Metricas:
+
+- `recall`: que proporcion de los productos reales se extrajo;
+- `precision`: que proporcion de lo extraido es real y esta en alcance;
+- `fiabilidad_completa`: productos con TODOS los campos correctos / productos reales.
+
+Con `--rescate` aplica sobre los checkpoints el rescate de filas economicas (sin llamar al modelo).
+El gold de la prueba de noviembre vive en `pruebas_calidad/gold/` (100 productos de 10 licitaciones,
+incluyendo cifras partidas por espacios, anexos "Tipo 1", accesorios y una licitacion de servidores).
+
+### Que hace el pipeline para no perder ni mezclar informacion
+
+- **Rescate de filas del anexo economico**: filas con cantidad x unitario = total que son equipos del
+  alcance y el modelo no asocio a ningun producto se incorporan (marcadas `rescatado_fila_economica`).
+- **Cifras partidas por espacios**: "6 75.620 1 0 6 .756.200" se reconstruye como 10 x 675.620 =
+  6.756.200 solo si existe una unica particion que cuadra (`filas_precio_texto_libre`).
+- **Fuente de cada dato por codigo**: la marca/producto/precio se atribuyen al archivo cuyo hallazgo
+  parcial coincide, no al nombre que el modelo cite (puede abreviarlo o inventarlo).
+- **Filtro de anexos tecnicos irrelevantes** (`anexo_tecnico_sin_equipos`): no se llama al modelo para
+  certificados ISO, pactos de integridad o documentos sin ningun equipo. Los economicos nunca se omiten.
+  `--sin-filtro-tecnicos` lo desactiva.
+- **Validacion determinista**: plausibilidad de precios, conflictos solo entre lineas equivalentes,
+  precio repetido entre categorias, alcance (accesorios, servidores, UPS, escaneres).
+
+## Corrida reproducible y verificacion (procedimiento recomendado)
+
+El extractor IA puede equivocarse o dejar datos sin asociar. Por eso cada corrida
+termina con una **auditoria independiente del modelo** (`5_auditar_extraccion.py`)
+que relee los documentos originales y comprueba tres cosas:
+
+| Riesgo | Comprobacion |
+|---|---|
+| **Falta informacion** | Filas del anexo economico con cantidad x unitario = total que son equipos del alcance y ningun producto recoge. Se incorporan marcadas (`rescatado_fila_economica`). Tambien lista proveedores sin productos y archivos sin leer (OCR pendiente, formato no soportado, fallo del modelo). |
+| **Informacion mezclada** | Precio unitario/total que no aparece en ningun documento del proveedor; mismo precio en productos de distinta categoria; conflictos entre fuentes (solo entre lineas realmente equivalentes). |
+| **Marca incorrecta** | Marca que no aparece escrita en los documentos del proveedor; alias unificados (Hewlett Packard -> HP) y fabricantes de componentes (Intel, AMD) descartados como marca. |
+
+Cada producto queda con `Nivel auditoria`: **verificado** (validacion ok y todos sus
+valores estan en los documentos), **revisar** (con los motivos) o **no_verificable**
+(documentos sin texto, p.ej. escaneados).
+
+Pasos:
+
+```powershell
+# 1. Extraer (mismos parametros siempre; anota modelo y flags usados)
+.\.venv\Scripts\python.exe .\automatizar_pipeline.py --in ".\ListaLicitaciones2026.csv" --salida ".\lotes" `
+  --desde 2025-11 --hasta 2025-11 --backend lmstudio --modelo "qwen/qwen3.6-35b-a3b" --ocr
+
+# 2. Auditar contra los documentos (no usa IA)
+.\.venv\Scripts\python.exe .\5_auditar_extraccion.py --dir ".\lotes\*\ofertas" --workers 6 --excel ".\auditoria.xlsx"
+
+# 3. Revisar solo lo dudoso con evidencia visual (recorte del PDF con la fila marcada)
+.\.venv\Scripts\python.exe .\4_revisar_extraccion.py --dir ".\lotes\2025-11\ofertas" --fuente ia
+```
+
+Hojas de `auditoria.xlsx`: `Productos` (con nivel y motivos), `Resumen` (% verificado por
+licitacion y total), `Sin_leer` (archivos que nadie leyó), `Sin_productos`.
+Cierra una corrida cuando: `Sin_leer` no tiene archivos de tipo economico/tecnico con
+productos posibles, `Sin_productos` fue revisado, y una muestra de `verificado` revisada
+en el HTML confirma la precision.
+
+Reglas de no-regresion: los tests (`python -m unittest discover -s tests`) cubren el
+alcance (accesorios, MacBook/IdeaPad/ZBook), marcas, conflictos falsos, plausibilidad de
+precios y rescate de filas. No mezclar en un mismo consolidado lotes hechos con modelos
+distintos sin indicarlo: usar el mismo `--modelo` en todo el periodo.
 
 ## Comparacion opcional con OpenAI
 
@@ -824,8 +966,8 @@ lotes/
     ...
 ```
 
-`resultados_consolidados.xlsx` une los Excel mensuales con las hojas `Productos`,
-`Productos_validos`, `Alertas`, `Resumen` (con fila TOTAL) y `Consumo`.
+`resultados_consolidados.xlsx` une las hojas `Productos` de los Excel mensuales (y `Resumen`,
+`Consumo` si existen en meses antiguos).
 
 Si el proceso se interrumpe, se ejecuta la misma orden. El scraper omite las
 licitaciones con estado `ok` y el extractor local reutiliza los proveedores ya
@@ -940,4 +1082,4 @@ Deuda tecnica y mejoras posibles:
   aprovechar la cache de prefijo de LM Studio;
 - reducir llamadas agrupando paginas relevantes por proveedor;
 - llevar la validacion avanzada del extractor local al comparador OpenAI;
-- agregar un dashboard para analizar marcas, precios y participacion por mes.
+- agregar un dashboard para analizar marcas, precios y participacion por mes.
