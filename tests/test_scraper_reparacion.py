@@ -41,5 +41,30 @@ class ReparacionScraperTest(unittest.TestCase):
             self.assertEqual((datos["ofertas"], datos["archivos"]), (2, 3))
 
 
+
+class PaginacionDelPopupTest(unittest.TestCase):
+    def test_detecta_las_paginas_del_popup_de_anexos(self):
+        html = ("<a href=\"javascript:__doPostBack('DWNL$grdId','Page$2')\">2</a>"
+                "<a href=\"javascript:__doPostBack('DWNL$grdId','Page$3')\">3</a>")
+        self.assertEqual(sorted(int(n) for n in scraper.PATRON_PAGINA_POPUP.findall(html)), [2, 3])
+
+    def test_anexo_con_seis_archivos_se_considera_posiblemente_truncado(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lic = Path(tmp) / "100-1-LE26"
+            seis = [f"tecnico__{i:02d}__a.pdf" for i in range(1, 7)]
+            proveedor(lic / "1-1__truncado", "1-1", {"tecnico": "u"}, seis)
+            proveedor(lic / "2-2__completo", "2-2", {"tecnico": "u"}, seis[:4])
+            proveedor(lic / "3-3__doce", "3-3", {"tecnico": "u"}, [f"tecnico__{i:02d}__a.pdf" for i in range(1, 13)])
+            self.assertEqual(scraper.faltantes_en_disco(lic), {"1-1", "3-3"})
+
+    def test_archivo_ya_bajado_se_reconoce_por_prefijo_e_indice(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            carpeta = Path(tmp)
+            (carpeta / "tecnico__03__ficha (1).pdf").write_bytes(b"x")
+            self.assertTrue(scraper.archivo_ya_bajado(carpeta, "tecnico", 3))
+            self.assertFalse(scraper.archivo_ya_bajado(carpeta, "tecnico", 4))
+            self.assertFalse(scraper.archivo_ya_bajado(carpeta, "economico", 3))
+
+
 if __name__ == "__main__":
     unittest.main()

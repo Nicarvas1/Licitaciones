@@ -154,29 +154,78 @@ def localizar_frame(page, reintentos=3):
     return page, (page.content() if page else "")
 
 
-def descargar_popup(context, url_popup, carpeta, prefijo):
-    bajados = 0
-    popup = context.new_page()
-    try:
-        popup.goto(url_popup, wait_until="networkidle", timeout=45000)
-    except PWTimeout:
-        popup.close(); return 0
-    botones = popup.query_selector_all("input[id^='DWNL_grdId_'][id$='_search']")
-    if not botones:
-        botones = popup.query_selector_all("input[type='image'][src*='ver.gif']")
-    for idx, b in enumerate(botones, 1):
+SELECTOR_DESCARGA = "input[id^='DWNL_grdId_'][id$='_search']"
+SELECTOR_DESCARGA_ALTERNO = "input[type='image'][src*='ver.gif']"
+# El popup de anexos muestra 6 archivos por pagina (GridView de ASP.NET): el resto esta en "Page$2", "Page$3"...
+ARCHIVOS_POR_PAGINA_POPUP = 6
+PATRON_PAGINA_POPUP = re.compile(r"__doPostBack\('DWNL\$grdId','Page\$(\d+)'\)")
+
+
+def botones_de_descarga(popup):
+    return popup.query_selector_all(SELECTOR_DESCARGA) or popup.query_selector_all(SELECTOR_DESCARGA_ALTERNO)
+
+
+def abrir_popup(context, url_popup, intentos=3):
+    """Abre el popup de anexos; reintenta si no cargo o llego sin botones (carga intermitente del portal)."""
+    for intento in range(1, intentos + 1):
+        popup = context.new_page()
         try:
-            with popup.expect_download(timeout=45000) as dl:
-                b.click()
-            d = dl.value
-            nom = re.sub(r"[^\w\s.\-()]", "_", d.suggested_filename or f"{prefijo}_{idx}")[:150]
-            dest = carpeta / f"{prefijo}__{idx:02d}__{nom}"
-            d.save_as(str(dest))
-            bajados += 1
-            print(f"        ✅ {dest.name[:58]}")
+            popup.goto(url_popup, wait_until="networkidle", timeout=45000)
+            if botones_de_descarga(popup):
+                return popup
+        except PWTimeout:
+            pass
+        popup.close()
+        if intento < intentos:
+            time.sleep(2.0 * intento)
+    return None
+
+
+def archivo_ya_bajado(carpeta, prefijo, indice):
+    return any(Path(carpeta).glob(f"{prefijo}__{indice:02d}__*"))
+
+
+def descargar_popup(context, url_popup, carpeta, prefijo, max_paginas=40):
+    """Descarga TODOS los archivos de un anexo recorriendo las paginas del popup. Los archivos que ya
+    existen (mismo prefijo e indice) no se vuelven a bajar. Devuelve cuantos archivos nuevos bajo."""
+    bajados = 0
+    popup = abrir_popup(context, url_popup)
+    if popup is None:
+        return 0
+    indice, pagina, visitadas = 0, 1, set()
+    while pagina not in visitadas and len(visitadas) < max_paginas:
+        visitadas.add(pagina)
+        for boton in botones_de_descarga(popup):
+            indice += 1
+            if archivo_ya_bajado(carpeta, prefijo, indice):
+                continue
+            for intento in (1, 2):
+                try:
+                    with popup.expect_download(timeout=45000) as dl:
+                        boton.click()
+                    d = dl.value
+                    nom = re.sub(r"[^\w\s.\-()]", "_", d.suggested_filename or f"{prefijo}_{indice}")[:150]
+                    dest = carpeta / f"{prefijo}__{indice:02d}__{nom}"
+                    d.save_as(str(dest))
+                    bajados += 1
+                    print(f"        ✅ {dest.name[:58]}")
+                    break
+                except Exception as e:
+                    if intento == 2:
+                        print(f"        ⚠️ archivo {indice}: {str(e)[:40]}")
+                    else:
+                        time.sleep(1.5)
+            time.sleep(0.4)
+        siguientes = sorted(int(n) for n in PATRON_PAGINA_POPUP.findall(popup.content()) if int(n) > pagina)
+        if not siguientes:
+            break
+        pagina = siguientes[0]
+        try:
+            with popup.expect_navigation(wait_until="networkidle", timeout=45000):
+                popup.evaluate(f"__doPostBack('DWNL$grdId','Page${pagina}')")
         except Exception as e:
-            print(f"        ⚠️ archivo {idx}: {str(e)[:40]}")
-        time.sleep(0.4)
+            print(f"        ⚠️ pagina {pagina} del popup: {str(e)[:40]}")
+            break
     popup.close()
     return bajados
 
@@ -290,7 +339,8 @@ def procesar_licitacion(context, identificador, es_qs=False,
             if rut in ruts_excluir:
                 continue
             for tipo, url_popup in of["anexos"].items():
-                if tipo not in tipos_anexos:
+                ya_tiene_admin = tipo == "administrativo" and any(carpeta_of.glob("administrativo__*"))
+                if tipo not in tipos_anexos and not ya_tiene_admin:
                     continue
                 print(f"       - {tipo}")
                 total_arch += descargar_popup(context, url_popup, carpeta_of, tipo)
@@ -448,10 +498,16 @@ def faltantes_en_disco(carpeta_licitacion, tipos=("economico", "tecnico")):
             datos = json.loads(oferta.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
-        bajados = {f.name.split("__")[0] for f in carpeta.iterdir() if f.is_file()}
+        prefijos = [f.name.split("__")[0] for f in carpeta.iterdir() if f.is_file()]
+        bajados = set(prefijos)
         enlaces = datos.get("enlaces_anexos") or {}
         sin_nada = not carpeta_tiene_archivos(carpeta)
-        if any(t in enlaces and t not in bajados for t in tipos) or (sin_nada and "administrativo" in enlaces):
+        # Un anexo con exactamente 6 archivos (o multiplo) puede estar truncado: el popup pagina de a 6.
+        posible_truncado = any(
+            t in enlaces and prefijos.count(t) and prefijos.count(t) % ARCHIVOS_POR_PAGINA_POPUP == 0
+            for t in (*tipos, "administrativo"))
+        if (any(t in enlaces and t not in bajados for t in tipos) or posible_truncado
+                or (sin_nada and "administrativo" in enlaces)):
             if datos.get("rut"):
                 faltan.add(str(datos["rut"]).strip())
     return faltan
