@@ -184,8 +184,14 @@ def descargar_popup(context, url_popup, carpeta, prefijo):
 # ---------------------------------------------------------------------------
 # Procesar UNA licitación (por código o qs)
 # ---------------------------------------------------------------------------
+def carpeta_tiene_archivos(carpeta):
+    """True si la carpeta del proveedor ya tiene algun documento descargado (no cuenta .json/.csv/.html)."""
+    return any(f.is_file() and f.suffix.lower() not in (".json", ".csv", ".html")
+               for f in Path(carpeta).iterdir())
+
+
 def procesar_licitacion(context, identificador, es_qs=False,
-                        tipos_anexos=None, ruts_objetivo=None, ruts_excluir=None):
+                        tipos_anexos=None, ruts_objetivo=None, ruts_excluir=None, admin_si_vacio=True):
     tipos_anexos = set(tipos_anexos or {"economico"})
     ruts_objetivo = {str(rut).strip() for rut in (ruts_objetivo or [])}
     ruts_excluir = {str(rut).strip() for rut in (ruts_excluir or [])}
@@ -288,6 +294,12 @@ def procesar_licitacion(context, identificador, es_qs=False,
                     continue
                 print(f"       - {tipo}")
                 total_arch += descargar_popup(context, url_popup, carpeta_of, tipo)
+            # Hay proveedores que suben su cotizacion dentro del anexo "administrativo": si no quedo ningun
+            # archivo del proveedor, se baja tambien ese anexo.
+            if (admin_si_vacio and "administrativo" not in tipos_anexos and "administrativo" in of["anexos"]
+                    and not carpeta_tiene_archivos(carpeta_of)):
+                print("       - administrativo (el proveedor no tiene economico ni tecnico descargable)")
+                total_arch += descargar_popup(context, of["anexos"]["administrativo"], carpeta_of, "administrativo")
 
     if total_of == 0 and (carpeta_lic / "metadata.json").is_file():
         # Respuesta vacia sobre una licitacion que ya tenia datos: se conserva lo descargado.
@@ -309,7 +321,7 @@ def procesar_licitacion(context, identificador, es_qs=False,
 
 def procesar_con_reintentos(browser, identificador, es_qs, tipos_anexos,
                             ruts_objetivo=None, max_intentos=2,
-                            pausa_reintento=15, ruts_excluir=None):
+                            pausa_reintento=15, ruts_excluir=None, admin_si_vacio=True):
     reintentables = {"sin_cuadro", "error_ficha", "error_cuadro", "sin_ofertas_leidas"}
     resultado = {"ofertas": 0, "archivos": 0, "estado": "error_desconocido"}
     for intento in range(1, max(1, max_intentos) + 1):
@@ -318,7 +330,7 @@ def procesar_con_reintentos(browser, identificador, es_qs, tipos_anexos,
             resultado = procesar_licitacion(
                 context, identificador, es_qs=es_qs,
                 tipos_anexos=tipos_anexos, ruts_objetivo=ruts_objetivo,
-                ruts_excluir=ruts_excluir
+                ruts_excluir=ruts_excluir, admin_si_vacio=admin_si_vacio
             )
         finally:
             context.close()
@@ -437,7 +449,9 @@ def faltantes_en_disco(carpeta_licitacion, tipos=("economico", "tecnico")):
         except (OSError, json.JSONDecodeError):
             continue
         bajados = {f.name.split("__")[0] for f in carpeta.iterdir() if f.is_file()}
-        if any(t in (datos.get("enlaces_anexos") or {}) and t not in bajados for t in tipos):
+        enlaces = datos.get("enlaces_anexos") or {}
+        sin_nada = not carpeta_tiene_archivos(carpeta)
+        if any(t in enlaces and t not in bajados for t in tipos) or (sin_nada and "administrativo" in enlaces):
             if datos.get("rut"):
                 faltan.add(str(datos["rut"]).strip())
     return faltan
@@ -489,6 +503,11 @@ def main():
                     help="Segundos antes de reintentar una respuesta anómala (default: 15).")
     ap.add_argument("--salida", default="ofertas",
                     help="Carpeta donde se guardan las licitaciones (default: ofertas).")
+    ap.add_argument("--sin-admin-si-vacio", action="store_true",
+                    help="No descargar el anexo administrativo de proveedores sin economico ni tecnico.")
+    ap.add_argument("--solo-administrativos", action="store_true",
+                    help="Descarga solo los anexos administrativos (para comprobar si traen la oferta).")
+    ap.add_argument("--ruts", help="Con --codigo/--qs: RUTs separados por coma a los que limitar la descarga.")
     ap.add_argument("--reparar", action="store_true",
                     help="Repara descargas incompletas: reprocesa las licitaciones con error o sin "
                          "metadata y baja solo los anexos economicos/tecnicos que faltan en disco.")
@@ -501,6 +520,8 @@ def main():
     if args.solo_tecnicos_fallback and (args.incluye_tecnicos or args.todos_anexos):
         sys.exit("No combines --solo-tecnicos-fallback con --incluye-tecnicos/--todos-anexos.")
     tipos_anexos = {"economico"}
+    if args.solo_administrativos:
+        tipos_anexos = {"administrativo"}
     if args.solo_tecnicos:
         tipos_anexos = {"tecnico"}
     if args.incluye_tecnicos:
@@ -525,7 +546,9 @@ def main():
             ident = args.qs or args.codigo
             procesar_con_reintentos(
                 browser, ident, es_qs=bool(args.qs), tipos_anexos=tipos_anexos,
-                max_intentos=args.max_intentos, pausa_reintento=args.pausa_reintento
+                ruts_objetivo=[r.strip() for r in args.ruts.split(",")] if args.ruts else None,
+                max_intentos=args.max_intentos, pausa_reintento=args.pausa_reintento,
+                admin_si_vacio=not args.sin_admin_si_vacio
             )
             browser.close()
             return
@@ -611,7 +634,8 @@ def main():
                 r = procesar_con_reintentos(
                     browser, codigo, es_qs=False, tipos_anexos=tipos_anexos,
                     ruts_objetivo=ruts_objetivo, ruts_excluir=ruts_excluir,
-                    max_intentos=args.max_intentos, pausa_reintento=args.pausa_reintento
+                    max_intentos=args.max_intentos, pausa_reintento=args.pausa_reintento,
+                    admin_si_vacio=not args.sin_admin_si_vacio
                 )
                 fila["scraping_estado"] = r.get("estado", "ok")
                 fila["n_ofertas"] = r.get("ofertas", 0)

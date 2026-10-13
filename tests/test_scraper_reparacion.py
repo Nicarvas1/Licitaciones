@@ -24,9 +24,11 @@ class ReparacionScraperTest(unittest.TestCase):
             proveedor(lic / "1-1__completo", "1-1", {"economico": "u", "tecnico": "u"},
                       ["economico__01__a.pdf", "tecnico__01__b.pdf"])
             proveedor(lic / "2-2__sin_tecnico", "2-2", {"economico": "u", "tecnico": "u"}, ["economico__01__a.pdf"])
-            proveedor(lic / "3-3__solo_admin", "3-3", {"administrativo": "u"})  # no se descarga a proposito
+            # sin economico ni tecnico: puede haber subido su cotizacion como "administrativo"
+            proveedor(lic / "3-3__solo_admin", "3-3", {"administrativo": "u"})
             proveedor(lic / "4-4__sin_anexos", "4-4", {})
-            self.assertEqual(scraper.faltantes_en_disco(lic), {"2-2"})
+            proveedor(lic / "5-5__admin_ya_bajado", "5-5", {"administrativo": "u"}, ["administrativo__01__a.pdf"])
+            self.assertEqual(scraper.faltantes_en_disco(lic), {"2-2", "3-3"})
 
     def test_recontar_archivos_y_ofertas_en_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
