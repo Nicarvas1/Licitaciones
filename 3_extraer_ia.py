@@ -799,6 +799,7 @@ def es_error_transitorio(texto):
 
 
 ESPERA_BACKEND_MINUTOS = 30
+OCR_DISPONIBLE = False  # se confirma al arrancar con verificar_ocr
 _LOCK_ESPERA_BACKEND = threading.Lock()
 
 
@@ -2902,7 +2903,9 @@ def archivo_fallo_modelo(registro):
 
 
 def archivo_pendiente_ocr(registro, previo):
-    return registro.get("archivo") in set(previo.get("necesita_ocr") or [])
+    # Si el OCR ya se intento (y Tesseract funcionaba) el archivo no tiene texto recuperable: rehacerlo en cada
+    # corrida solo gasta tiempo. Se reintenta cuando no hubo OCR (checkpoints viejos o Tesseract ausente).
+    return registro.get("archivo") in set(previo.get("necesita_ocr") or []) and not previo.get("ocr_intentado")
 
 
 def revision_necesaria(resultado, carpeta, args):
@@ -3280,6 +3283,7 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
         "consumo_consolidacion": consumo_consolidacion,
         "archivos_comprimidos": archivos_comprimidos,
         "necesita_ocr": necesita_ocr,
+        "ocr_intentado": bool(getattr(args, "ocr", False) and OCR_DISPONIBLE),
         "no_soportados": no_soportados,
         "marcas_detectadas_texto": sorted(marcas),
         "llamadas_modelo": llamadas,
@@ -3477,6 +3481,7 @@ def procesar_oferta(carpeta, args, seven_zip, previo=None, archivos_reprocesar=N
         "consumo_consolidacion": consumo_consolidacion,
         "archivos_comprimidos": archivos_comprimidos,
         "necesita_ocr": necesita_ocr,
+        "ocr_intentado": bool(getattr(args, "ocr", False) and OCR_DISPONIBLE),
         "no_soportados": no_soportados,
         "marcas_detectadas_texto": sorted(marcas_texto)
     }
@@ -3606,7 +3611,7 @@ def resultado_requiere_reproceso(resultado, usar_ocr=False, modelo=None, backend
         or fallo_consolidacion
         or cambio_modelo
         or cambio_backend
-        or (usar_ocr and bool(resultado.get("necesita_ocr")))
+        or (usar_ocr and bool(resultado.get("necesita_ocr")) and not resultado.get("ocr_intentado"))
         # Al activar --vision se reprocesan los proveedores leidos solo con texto.
         or (usar_vision and (bool(resultado.get("necesita_ocr")) if solo_escaneadas
                              else not resultado.get("vision")))
@@ -3871,6 +3876,8 @@ def main():
 
     if args.ocr and not args.solo_texto:
         ocr_ok, ocr_mensaje = verificar_ocr(args.tesseract_cmd, args.idioma_ocr)
+        global OCR_DISPONIBLE
+        OCR_DISPONIBLE = ocr_ok
         if ocr_ok:
             print(f"OCR disponible: {ocr_mensaje}")
         elif args.permitir_sin_ocr:

@@ -102,5 +102,18 @@ class FilaAgregadaTest(unittest.TestCase):
         self.assertIsNone(producto["precio_unitario"])
 
 
+
+class OcrNoSeRepiteTest(unittest.TestCase):
+    def test_archivo_sin_texto_tras_ocr_no_se_rehace_en_cada_corrida(self):
+        previo = {"necesita_ocr": ["economico__01__escaneado.pdf"], "ocr_intentado": True}
+        self.assertFalse(E.archivo_pendiente_ocr({"archivo": "economico__01__escaneado.pdf"}, previo))
+        self.assertFalse(E.resultado_requiere_reproceso(dict(previo, resultados_archivos=[]), usar_ocr=True))
+
+    def test_checkpoint_sin_ocr_intentado_si_se_rehace(self):
+        previo = {"necesita_ocr": ["economico__01__escaneado.pdf"]}
+        self.assertTrue(E.archivo_pendiente_ocr({"archivo": "economico__01__escaneado.pdf"}, previo))
+        self.assertTrue(E.resultado_requiere_reproceso(dict(previo, resultados_archivos=[]), usar_ocr=True))
+
+
 if __name__ == "__main__":
     unittest.main()

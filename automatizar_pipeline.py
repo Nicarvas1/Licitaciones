@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -356,6 +357,20 @@ def consolidar_reportes(salida, meses):
     return destino
 
 
+def mantener_despierto(activar=True):
+    """Evita que Windows suspenda el equipo mientras corre el pipeline (no cambia la configuracion de energia:
+    es la misma API que usan los reproductores de video y vuelve a la normalidad al terminar)."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        es_continuous, es_system_required = 0x80000000, 0x00000001
+        estado = es_continuous | es_system_required if activar else es_continuous
+        ctypes.windll.kernel32.SetThreadExecutionState(estado)
+    except Exception:
+        pass
+
+
 def crear_lock(salida):
     ruta = salida / ".pipeline.lock"
     try:
@@ -431,6 +446,8 @@ def main():
                         help="pasadas de reparacion del scraping por mes (default: 2)")
     parser.add_argument("--pasadas-ia", type=int, default=2,
                         help="veces que se vuelve a correr la extraccion de un mes si quedaron errores (default: 2)")
+    parser.add_argument("--sin-solapar", dest="solapar", action="store_false",
+                        help="no descarga el mes siguiente mientras extrae el actual (por defecto si lo hace)")
     parser.add_argument("--sin-verificar", action="store_true",
                         help="no corre verificar_entorno.py al inicio")
     args = parser.parse_args()
@@ -453,6 +470,7 @@ def main():
     lock = crear_lock(salida)
     log = salida / "pipeline.log"
     fallos = []
+    mantener_despierto(True)
 
     try:
         if not args.sin_verificar and not args.solo_preparar:
@@ -470,18 +488,23 @@ def main():
         if args.solo_preparar:
             return
 
-        for indice, mes in enumerate(meses, 1):
+        def preparar_mes(indice, mes):
             carpeta = salida / mes
             csv_mes = carpeta / "para_scrapear.csv"
             filas, estados_antes = estados_csv(csv_mes)
             if not filas:
                 print(f"\n[{indice}/{len(meses)}] {mes}: sin licitaciones scrapeables")
-                continue
-
+                return None
             print("\n" + "=" * 78)
             print(f"[{indice}/{len(meses)}] LOTE {mes} | licitaciones={len(filas)} | estados={dict(estados_antes)}")
             print("=" * 78)
+            return carpeta, csv_mes, filas
 
+        def etapa_scraping(indice, mes):
+            datos_mes = preparar_mes(indice, mes)
+            if datos_mes is None:
+                return
+            carpeta, csv_mes, filas = datos_mes
             pendientes = [
                 fila for fila in filas if requiere_scraping(fila, args.reintentar_errores)
             ]
@@ -509,12 +532,19 @@ def main():
                     ejecutar([sys.executable, str(SCRIPT_CONTAR), "--dir", str(carpeta / "ofertas"),
                               "--csv", str(carpeta / "descargas_faltantes.csv")], RAIZ_PROYECTO, log)
 
+
+        def etapa_ia(indice, mes):
+            carpeta = salida / mes
+            csv_mes = carpeta / "para_scrapear.csv"
+            if not csv_mes.is_file() or not estados_csv(csv_mes)[0]:
+                return
+            print(f"\n[{indice}/{len(meses)}] EXTRACCION {mes}")
             carpeta_ofertas = carpeta / "ofertas"
             if args.omitir_ia or not carpeta_ofertas.is_dir():
-                continue
+                return
             if not any(path.is_dir() for path in carpeta_ofertas.iterdir()):
                 print(f"{mes}: no hay ofertas descargadas para extraer")
-                continue
+                return
 
             comando = [
                 sys.executable, str(SCRIPT_IA),
@@ -571,6 +601,33 @@ def main():
             if codigo != 0:
                 fallos.append(f"{mes}: extractor IA local termino con codigo {codigo}")
 
+
+        solapar = args.solapar and not args.omitir_scraping and not args.omitir_ia
+        if solapar:
+            # El scraping (red) de los meses siguientes corre mientras se extrae (GPU) el mes ya descargado.
+            listos = {mes: threading.Event() for mes in meses}
+
+            def descargar_todo():
+                for indice, mes in enumerate(meses, 1):
+                    try:
+                        etapa_scraping(indice, mes)
+                    except Exception as exc:
+                        fallos.append(f"{mes}: error en el scraping: {exc}")
+                    finally:
+                        listos[mes].set()
+
+            hilo = threading.Thread(target=descargar_todo, name="scraping", daemon=True)
+            hilo.start()
+            for indice, mes in enumerate(meses, 1):
+                while not listos[mes].wait(timeout=2):
+                    pass
+                etapa_ia(indice, mes)
+            hilo.join()
+        else:
+            for indice, mes in enumerate(meses, 1):
+                etapa_scraping(indice, mes)
+                etapa_ia(indice, mes)
+
         meses_con_reporte = sorted(
             path.name for path in salida.iterdir()
             if path.is_dir() and re.fullmatch(r"20\d{2}-(?:0[1-9]|1[0-2])", path.name)
@@ -587,6 +644,7 @@ def main():
             raise SystemExit(1)
         print("PIPELINE COMPLETADO")
     finally:
+        mantener_despierto(False)
         lock.unlink(missing_ok=True)
 
 
