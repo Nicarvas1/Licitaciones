@@ -130,5 +130,24 @@ class TipoYCifrasTest(unittest.TestCase):
                          [(24, 735_069, 17_641_660)])
 
 
+
+class ArchivosDuplicadosTest(unittest.TestCase):
+    def test_el_mismo_pdf_como_economico_y_tecnico_se_lee_una_vez(self):
+        import tempfile, types
+        with tempfile.TemporaryDirectory() as tmp:
+            carpeta = Path(tmp)
+            texto = "Notebook HP ProBook 440 G11 cantidad 5 valor unitario $ 500.000 total $ 2.500.000"
+            (carpeta / "economico__01__oferta.txt").write_text(texto, encoding="utf-8")
+            (carpeta / "tecnico__01__oferta.txt").write_text(texto, encoding="utf-8")
+            args = types.SimpleNamespace(max_paginas=50, ocr=False, vision=False, tesseract_cmd=None, idioma_ocr="eng",
+                                         dpi_ocr=150, vision_min_filas=2, max_filas_excel=500, max_columnas_excel=20,
+                                         vision_solo_escaneadas=False, dpi_vision=150, max_fragmentos_tecnico=3,
+                                         sin_filtro_tecnicos=False, max_chars_archivo=7000)
+            _, registros, _, _, _ = E.preparar_bloques_proveedor(carpeta, sorted(carpeta.iterdir()), args)
+        estados = {r["archivo"]: r["estado_ia"] for r in registros}
+        self.assertEqual(estados["tecnico__01__oferta.txt"], "omitido_duplicado")
+        self.assertNotEqual(estados["economico__01__oferta.txt"], "omitido_duplicado")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -29,6 +29,7 @@ import argparse
 import base64
 import logging
 import csv
+import hashlib
 import importlib
 import io
 import json
@@ -74,7 +75,7 @@ OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 LMSTUDIO_URL = os.environ.get("LMSTUDIO_URL", "http://127.0.0.1:1234/v1/chat/completions")
 DEBUG = False
 ESTADOS_IA_OK = {"ok", "ok_reparado", "ok_extraido"}
-ESTADOS_IA_NEUTROS = ("no_ejecutada", "solo_texto", "omitido_sin_equipos")
+ESTADOS_IA_NEUTROS = ("no_ejecutada", "solo_texto", "omitido_sin_equipos", "omitido_duplicado")
 # PyMuPDF no es seguro entre hilos: todo uso de fitz pasa por este lock.
 # Solo protege abrir/renderizar PDFs (rapido); las llamadas al modelo quedan fuera.
 FITZ_LOCK = threading.Lock()
@@ -3063,6 +3064,7 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
     bloques, registros, necesita_ocr, no_soportados = [], [], [], []
     descartados = []  # paginas con texto que el filtro no envio (respaldo)
     marcas = set()
+    huellas = {}
     for path in sorted(archivos, key=prioridad):
         verificar_detencion()
         relativo = str(path.relative_to(carpeta))
@@ -3071,6 +3073,17 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
                     "estado_lectura": "", "caracteres": 0, "estado_ia": "no_ejecutada",
                     "productos_encontrados": 0, "observaciones": None, "paginas_enviadas": []}
         registros.append(registro)
+        # El mismo PDF subido como economico y como tecnico: se lee una sola vez (el economico va primero).
+        try:
+            huella = hashlib.md5(Path(ruta_sistema(path)).read_bytes()).hexdigest()
+        except OSError:
+            huella = None
+        if huella and huella in huellas:
+            registro.update({"estado_lectura": "duplicado", "estado_ia": "omitido_duplicado",
+                             "observaciones": f"mismo contenido que {huellas[huella]}"})
+            continue
+        if huella:
+            huellas[huella] = relativo
 
         if extension in EXTENSIONES_IMAGEN:
             registro["estado_lectura"] = "imagen"
