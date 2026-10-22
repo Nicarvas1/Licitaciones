@@ -1070,8 +1070,9 @@ def particion_cantidad_unitario_total(texto_digitos, maximo_cantidad=20000):
                 continue
             a, b, total = (int(p) for p in partes)
             for cantidad, unitario in ((b, a), (a, b)):
+                # el unitario puede venir redondeado (735.069,17 -> 735.069): se tolera menos de 1 peso por unidad
                 if (1 <= cantidad <= maximo_cantidad and unitario >= 1000 and total >= unitario
-                        and cantidad * unitario == total):
+                        and abs(cantidad * unitario - total) < cantidad):
                     soluciones.add((cantidad, unitario, total))
     return next(iter(soluciones)) if len(soluciones) == 1 else None
 
@@ -1572,7 +1573,27 @@ def normalizar_tipo(valor):
     return ALIAS_TIPO.get(texto)
 
 
+PATRON_IMPRESORA_FUERTE = re.compile(
+    r"impresora|multifuncional|printer|eco\s?tank|smart\s?tank|laserjet|deskjet|officejet|workforce|inkjet|"
+    r"plotter|t[oó]ner|tinta", re.I)
+MARCAS_SOLO_IMPRESION = {"epson", "brother", "canon", "ricoh", "kyocera", "xerox", "lexmark", "zebra", "pantum",
+                         "konica minolta", "sharp", "oki"}
+
+
 def subcategoria_producto(producto):
+    """Tipo de equipo para analisis (ver _subcategoria_producto). Una impresora "AIO" (all-in-one de impresion:
+    imprime, copia y escanea) no es un computador All-in-One: si el texto es de impresora o la marca solo
+    fabrica impresoras, manda impresora."""
+    tipo = _subcategoria_producto(producto)
+    if tipo in ("all-in-one", "desktop", "equipo (sin especificar)", None):
+        texto = " ".join(str(producto.get(c) or "") for c in ("producto", "modelo"))
+        marca = str(producto.get("marca") or "").strip().lower()
+        if PATRON_IMPRESORA_FUERTE.search(texto) or marca in MARCAS_SOLO_IMPRESION:
+            return "impresora"
+    return tipo
+
+
+def _subcategoria_producto(producto):
     """Tipo de equipo para analisis: notebook, all-in-one, desktop, workstation,
     monitor o impresora. 'equipo (sin especificar)' si no se puede distinguir.
     Prefiere el tipo declarado por el modelo al leer el documento."""

@@ -68,6 +68,31 @@ Los datos (`ofertas/`, `lotes_*/`, Excel, PDF, logs) no se versionan.
 .\.venv\Scripts\python.exe .\4_revisar_extraccion.py --dir .\lotes\2025-11\ofertas --fuente ia
 ```
 
+## Corrida desatendida (fin de semana)
+
+1. Actualizar el código y verificar el entorno:
+
+   ```powershell
+   git pull
+   .\.venv\Scripts\python.exe .\verificar_entorno.py --modelo "qwen/qwen3.6-35b-a3b" --salida D:\lotes
+   ```
+
+   Debe terminar sin errores. Avisos frecuentes y su solución:
+   - **OCR sin español:** `.\.venv\Scripts\python.exe .\verificar_entorno.py --preparar-tessdata` (deja `tessdata\` en el proyecto; no requiere administrador).
+   - **Paralelismo ~1:** en LM Studio, al cargar el modelo, subir *Max Concurrent Predictions* a 4. Con 1 la corrida tarda 3 a 4 veces más.
+2. Lanzar todo:
+
+   ```powershell
+   .\correr_fin_de_semana.ps1 -Catalogo .\ListaLicitaciones.csv -Salida D:\lotes
+   ```
+
+   Filtra, descarga (mientras extrae el mes anterior), repara descargas incompletas, extrae, reintenta los
+   proveedores que fallaron, audita cada mes y deja `D:\lotes\resultados_consolidados.xlsx`. Si algo se corta
+   (LM Studio, internet), espera y retoma solo; volver a ejecutar el mismo comando nunca repite lo que ya está bien.
+   El equipo no se suspende mientras corre.
+3. Revisar al terminar: `D:\lotes\fin_de_semana.log`, `D:\lotes\pipeline.log` y, por mes,
+   `descargas_faltantes.csv` (anexos que el portal ofrecía y no se pudieron bajar) y `auditoria.xlsx`.
+
 ## Corrida de varios meses (año completo)
 
 `correr_anio.ps1` recorre todos los meses de una carpeta de datos (`<Datos>\<YYYY-MM>\{para_scrapear.csv, ofertas}`, también bajo `lotes_*\`) y por cada mes repara las descargas, extrae con LM Studio y audita sin IA. Es reanudable: si se corta, se vuelve a ejecutar el mismo comando.

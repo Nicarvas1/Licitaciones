@@ -115,5 +115,20 @@ class OcrNoSeRepiteTest(unittest.TestCase):
         self.assertTrue(E.resultado_requiere_reproceso(dict(previo, resultados_archivos=[]), usar_ocr=True))
 
 
+
+class TipoYCifrasTest(unittest.TestCase):
+    def test_impresora_aio_no_es_un_computador_all_in_one(self):
+        self.assertEqual(E.subcategoria_producto({"producto": "All-in-One Epson L14150", "marca": "Epson"}), "impresora")
+        self.assertEqual(E.subcategoria_producto({"producto": "HP Smart Tank 580 AIO", "marca": "HP"}), "impresora")
+        self.assertEqual(E.subcategoria_producto({"producto": "AIO HP ProOne 440 G9", "marca": "HP"}), "all-in-one")
+
+    def test_fila_con_comas_de_miles_cifras_partidas_y_unitario_redondeado(self):
+        texto = ("90PT03X6-M06CL0 ASUS AIO P440VAK-BPCD12X core 5 210H, 23.8 FHD, 512GB SSD WIN 11 PRO "
+                 "24 $ 7 35,069 17,641,660")
+        filas = E.filas_precio_texto_libre([{"archivo": "economico__01__c.pdf", "pagina": 1, "texto": texto}])
+        self.assertEqual([(f["cantidad"], f["precio_unitario"], f["precio_total"]) for f in filas],
+                         [(24, 735_069, 17_641_660)])
+
+
 if __name__ == "__main__":
     unittest.main()
