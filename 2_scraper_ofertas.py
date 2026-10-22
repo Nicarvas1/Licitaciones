@@ -525,6 +525,18 @@ def ruts_en_disco(carpeta_licitacion):
     return ruts
 
 
+def licitacion_sin_datos(carpeta_licitacion):
+    """True si la licitacion no se descargo (sin metadata) o quedo con 0 ofertas: casi siempre fue una grilla
+    que el portal entrego vacia, no una licitacion sin oferentes."""
+    meta = Path(carpeta_licitacion) / "metadata.json"
+    if not meta.is_file():
+        return True
+    try:
+        return int(json.loads(meta.read_text(encoding="utf-8")).get("ofertas") or 0) == 0
+    except (OSError, json.JSONDecodeError, ValueError):
+        return True
+
+
 def faltantes_en_disco(carpeta_licitacion, tipos=("economico", "tecnico")):
     """RUTs con enlace a un anexo (de los tipos pedidos) que no se descargo a disco."""
     faltan = set()
@@ -687,7 +699,7 @@ def main():
                 cod = (f.get("codigo") or "").strip()
                 carpeta = SALIDA / cod
                 est = (f.get("scraping_estado") or "").strip().lower()
-                if est.startswith("error") or not (carpeta / "metadata.json").is_file():
+                if est.startswith("error") or licitacion_sin_datos(carpeta):
                     reparaciones[cod] = None  # licitacion completa
                 else:
                     faltan = faltantes_en_disco(carpeta)

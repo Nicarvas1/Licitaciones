@@ -78,5 +78,18 @@ class HuecosEnLaNumeracionTest(unittest.TestCase):
             self.assertEqual(scraper.faltantes_en_disco(lic), {"1-1"})
 
 
+
+class LicitacionSinDatosTest(unittest.TestCase):
+    def test_metadata_con_cero_ofertas_cuenta_como_no_descargada(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lic = Path(tmp) / "100-1-LE26"
+            lic.mkdir()
+            self.assertTrue(scraper.licitacion_sin_datos(lic))  # sin metadata
+            (lic / "metadata.json").write_text(json.dumps({"ofertas": 0, "archivos": 0}), encoding="utf-8")
+            self.assertTrue(scraper.licitacion_sin_datos(lic))
+            (lic / "metadata.json").write_text(json.dumps({"ofertas": 7, "archivos": 30}), encoding="utf-8")
+            self.assertFalse(scraper.licitacion_sin_datos(lic))
+
+
 if __name__ == "__main__":
     unittest.main()
