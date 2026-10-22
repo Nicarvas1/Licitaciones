@@ -130,6 +130,11 @@ def auditar_proveedor(tarea):
             unitario, total, cantidad = producto.get("precio_unitario"), producto.get("precio_total"), producto.get("cantidad")
             unitario_visible = isinstance(unitario, (int, float)) and round(unitario) in numeros
             total_visible = isinstance(total, (int, float)) and round(total) in numeros
+            if isinstance(total, (int, float)) and not total_visible and (
+                    producto.get("precio_desde_linea_agregada") or producto.get("total_con_iva_convertido")
+                    or producto.get("precios_convertidos_a_neto_por_total_oferta")):
+                # el documento trae el total con IVA; el neto se dedujo
+                total_visible = any(abs(round(total * E.TASA_IVA) - n) <= 2 for n in numeros)
             coherente = all(isinstance(v, (int, float)) and v > 0 for v in (unitario, total, cantidad)) and                 abs(cantidad * unitario - total) <= max(2, total * 0.001)
             # Un valor que el documento no escribe pero que sale de cantidad x unitario (o total / cantidad) esta
             # respaldado por el otro valor; solo se marca si ninguno de los dos aparece.

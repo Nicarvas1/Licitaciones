@@ -203,13 +203,33 @@ def cargar_metadata_para_corrida(licitaciones, ruta_explicitada=None):
     return metadata
 
 
+RUTAS_TESSERACT_WINDOWS = (r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                           r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe")
+TESSDATA_LOCAL = Path(__file__).resolve().parent / "tessdata"
+
+
+def configurar_tesseract(tesseract_cmd=None):
+    """Ubica Tesseract aunque no este en el PATH y usa la carpeta tessdata del proyecto si tiene idiomas (asi se
+    agrega el espanol sin permisos de administrador: python verificar_entorno.py --preparar-tessdata)."""
+    if pytesseract is None:
+        return
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    elif pytesseract.pytesseract.tesseract_cmd == "tesseract" and not shutil.which("tesseract"):
+        for ruta in RUTAS_TESSERACT_WINDOWS:
+            if os.path.isfile(ruta):
+                pytesseract.pytesseract.tesseract_cmd = ruta
+                break
+    if "TESSDATA_PREFIX" not in os.environ and any(TESSDATA_LOCAL.glob("*.traineddata")):
+        os.environ["TESSDATA_PREFIX"] = str(TESSDATA_LOCAL)
+
+
 def verificar_ocr(tesseract_cmd=None, idioma="spa+eng"):
     """(ok, mensaje). Con --ocr, un Tesseract ausente no da error: los PDF escaneados quedan "sin leer" y se
     pierden productos sin aviso. Esta comprobacion se hace al arrancar para que falle de forma visible."""
     if pytesseract is None or Image is None:
         return False, "falta la libreria pytesseract o Pillow (pip install -r requirements.txt)"
-    if tesseract_cmd:
-        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    configurar_tesseract(tesseract_cmd)
     try:
         version = str(pytesseract.get_tesseract_version())
         idiomas = set(pytesseract.get_languages(config=""))
@@ -250,8 +270,7 @@ def extraer_pdf_ocr(
 ):
     if pytesseract is None or Image is None:
         return "", "ocr_dependencia_no_disponible"
-    if tesseract_cmd:
-        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    configurar_tesseract(tesseract_cmd)
     idioma = idioma_ocr_efectivo(idioma)
     try:
         # Renderizar bajo lock (PyMuPDF no es thread-safe); el OCR corre fuera del lock.
@@ -779,6 +798,41 @@ def es_error_transitorio(texto):
     return bool(PATRON_ERROR_TRANSITORIO.search(str(texto or "")))
 
 
+ESPERA_BACKEND_MINUTOS = 30
+_LOCK_ESPERA_BACKEND = threading.Lock()
+
+
+def url_modelos(backend):
+    if backend == "lmstudio":
+        return LMSTUDIO_URL.split("/v1/")[0] + "/v1/models"
+    return OLLAMA_URL.split("/api/")[0] + "/api/tags"
+
+
+def backend_responde(backend, timeout=10):
+    """True si el servidor del modelo contesta (aunque una peticion concreta haya fallado)."""
+    try:
+        return requests.get(url_modelos(backend), timeout=timeout).status_code < 500
+    except requests.exceptions.RequestException:
+        return False
+
+
+def esperar_backend(backend, minutos):
+    """Espera hasta `minutos` a que el servidor vuelva (sondea cada 30 s). Un solo hilo espera; los demas
+    esperan a que termine. Devuelve True si volvio."""
+    with _LOCK_ESPERA_BACKEND:
+        if backend_responde(backend):
+            return True
+        limite = time.monotonic() + minutos * 60
+        print(f"\n  {backend} no responde; se espera hasta {minutos} min a que vuelva...")
+        while time.monotonic() < limite:
+            if DETENER.wait(30):
+                return False
+            if backend_responde(backend):
+                print(f"  {backend} volvio a responder; se continua.")
+                return True
+        return False
+
+
 def calentar_modelo(args, intentos=4, espera=10):
     """Peticion minima antes de la carga real: activa el enlace (LM Link) y confirma que
     el modelo responde. Devuelve los segundos que tardo o None si no respondio."""
@@ -887,7 +941,17 @@ def consultar_modelo(
         except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
             ultimo_error = str(exc)
             if intento >= reintentos:
-                raise RuntimeError(f"{backend} dejo de responder tras {reintentos + 1} intentos: {exc}")
+                if backend_responde(backend):
+                    # El servidor esta vivo: es esta peticion la que no termina (documento enorme o modelo
+                    # atascado en ella). Se registra como fallo del archivo y la corrida sigue.
+                    return None, f"timeout_{backend}: {str(exc)[:200]}", "", {}
+                # El servidor no contesta (LM Studio reiniciandose, LM Link caido...): se espera a que vuelva
+                # antes de dar la corrida por perdida. Corridas desatendidas sobreviven a cortes cortos.
+                if esperar_backend(backend, ESPERA_BACKEND_MINUTOS):
+                    return consultar_modelo(prompt, modelo, timeout, num_ctx, backend, max_tokens,
+                                            reintentos, espera_reintento, imagenes)
+                raise RuntimeError(f"{backend} dejo de responder tras {reintentos + 1} intentos y "
+                                   f"{ESPERA_BACKEND_MINUTOS} min de espera: {exc}")
         except Exception as exc:
             return None, f"error_{backend}: {exc}", "", {}
         time.sleep(espera_reintento)
@@ -1078,6 +1142,8 @@ def marcar_precios_sin_respaldo(productos, numeros_documentos, bloques_economico
         valores = [round(v) for v in (unitario, total) if isinstance(v, (int, float)) and v > 0]
         if not valores or (unitario, total) in pares:
             continue
+        if producto.get("precio_desde_linea_agregada"):
+            continue  # unitario deducido de "N equipos || total": el documento trae el total, no el unitario
         if not any(v in numeros_documentos for v in valores):
             producto["precio_sin_respaldo"] = True
     return productos
@@ -1862,6 +1928,132 @@ def completar_marcas_por_nombre_de_archivo(productos, nombres_archivos):
     return productos
 
 
+PATRON_NOMBRE_GENERICO = (r"notebooks?|laptops?|port[aá]tiles?|computador(?:es|as?)?|equipos?(?:\s+computacionales)?|"
+                          r"monitor(?:es)?|pantallas?|impresoras?|multifuncional(?:es)?|all\s*in\s*one|aio|"
+                          r"desktops?|pcs?|estaciones?\s+de\s+trabajo|workstations?")
+PATRON_FILA_AGREGADA = re.compile(r"^\s*(\d{1,5})\s+(?:unidades?\s+(?:de\s+)?|u\.?\s+)?(" + PATRON_NOMBRE_GENERICO + r")\b(.*)$",
+                                  re.I)
+PATRON_BLOQUE_CON_IVA = re.compile(r"con\s+iva|iva\s+incluido|impuestos?\s+incluidos?|valor\s+bruto", re.I)
+
+
+def filas_agregadas(bloques):
+    """Lineas de anexo economico con cantidad y un solo monto para un rubro generico, del tipo
+    "52 NOTEBOOKS || $ 45.172.400" o "52 || Notebook || $ 45.172.400". No traen precio unitario: el
+    unitario se deduce (total / cantidad), pasando a neto si el anexo declara valores con IVA."""
+    filas = []
+    for bloque in bloques:
+        archivo = bloque.get("archivo") or ""
+        if tipo_documental(Path(str(archivo)).name) != "economico":
+            continue
+        texto = str(bloque.get("texto") or "")
+        con_iva = bool(PATRON_BLOQUE_CON_IVA.search(texto))
+        for linea in texto.splitlines():
+            limpia = re.sub(r"^\s*FILA\s+\d+:\s*", "", linea, flags=re.I)
+            celdas = [c.strip() for c in limpia.split("||") if c.strip()]
+            if len(celdas) < 2:
+                continue
+            montos = [normalizar_numero(c) for c in celdas[1:] if PATRON_CELDA_NUMERICA.fullmatch(c)]
+            montos = [m for m in montos if isinstance(m, (int, float)) and m >= 50_000]
+            if len(montos) != 1:
+                continue  # con unitario y total la fila ya la cubre rescatar_filas_economicas
+            cantidad, descripcion = None, None
+            m = PATRON_FILA_AGREGADA.match(celdas[0])
+            if m:
+                cantidad, descripcion = int(m.group(1)), f"{m.group(2)}{m.group(3)}".strip()
+            elif (len(celdas) >= 3 and re.fullmatch(r"\d{1,5}", celdas[0])
+                  and re.match(r"\W*(?:" + PATRON_NOMBRE_GENERICO + r")\b", celdas[1], re.I)):
+                cantidad, descripcion = int(celdas[0]), celdas[1]
+            if not cantidad or cantidad <= 0:
+                continue
+            tipo = subcategoria_producto({"producto": descripcion, "categoria": "equipo"})
+            if not tipo or tipo.startswith("equipo"):
+                continue
+            filas.append({"archivo": archivo, "pagina": bloque.get("pagina"), "cantidad": cantidad,
+                          "tipo": tipo, "total": montos[0], "con_iva": con_iva, "texto": limpia[:200]})
+    return filas
+
+
+def cruzar_filas_agregadas(productos, bloques):
+    """Cruce tecnico-economico para anexos que solo traen "N <rubro> || total": el equipo (marca y modelo) lo
+    trae la ficha tecnica y el precio esta en la linea agregada. Se asigna solo si hay exactamente un producto
+    sin precio de ese tipo y una sola linea agregada de ese tipo, con cantidad compatible."""
+    filas = filas_agregadas(bloques)
+    if not filas:
+        return productos
+    for tipo in {f["tipo"] for f in filas}:
+        de_tipo = [f for f in filas if f["tipo"] == tipo]
+        unicas = {(f["cantidad"], f["total"]) for f in de_tipo}
+        if len(unicas) != 1:
+            continue
+        fila = de_tipo[0]
+        candidatos = [p for p in productos
+                      if subcategoria_producto(p) == tipo
+                      and p.get("precio_unitario") in (None, "") and p.get("precio_total") in (None, "")
+                      and p.get("cantidad") in (None, "", fila["cantidad"])]
+        con_precio_mismo_tipo = [p for p in productos if subcategoria_producto(p) == tipo
+                                 and isinstance(p.get("precio_unitario"), (int, float))]
+        if len(candidatos) != 1 or con_precio_mismo_tipo:
+            continue
+        total = fila["total"] / TASA_IVA if fila["con_iva"] else fila["total"]
+        unitario = round(total / fila["cantidad"])
+        maximo = PRECIO_MAXIMO_POR_TIPO.get(tipo, PRECIO_UNITARIO_MAXIMO_CLP)
+        if not PRECIO_UNITARIO_MINIMO_CLP <= unitario <= maximo:
+            continue
+        producto = candidatos[0]
+        producto["cantidad"] = fila["cantidad"]
+        producto["precio_unitario"] = unitario
+        producto["precio_total"] = round(unitario * fila["cantidad"])
+        producto["fuente_precio"] = fila["archivo"]
+        producto["pagina_precio"] = fila["pagina"]
+        producto["precio_desde_linea_agregada"] = True
+        if fila["con_iva"]:
+            producto["total_con_iva_convertido"] = True
+        producto.setdefault("evidencia", fila["texto"])
+    return productos
+
+
+PATRON_CODIGO_GENERICO = re.compile(
+    r"^(?:\d+(?:gb|tb|mb|hz|mhz|ghz|w|wh|mah|mm|cm|pulg)|ddr\d\w*|lpddr\d\w*|i[3579]-?\d+\w*|r[3579]-?\d+\w*|"
+    r"w1[01]\w*|win1[01]\w*|usb\d?\w*|hdmi\d?\w*|wifi\d?\w*|wi-fi\d?\w*|pcie\d?\w*|gen\d+|\d+th|\d+(?:a|v)|"
+    r"fhd\w*|uhd\w*|wuxga\w*|4k\w*|rtx\w*|gtx\w*|nvme\w*|m\.?2\w*)$", re.I)
+
+
+def codigos_distintivos(producto):
+    """Codigos de modelo que identifican al equipo y no a un componente generico (16GB, i5-1335U, DDR5...)."""
+    return {c for c in codigos_de_modelo(producto) if len(c) >= 5 and not PATRON_CODIGO_GENERICO.match(c)}
+
+
+def completar_marcas_por_linea(productos, bloques):
+    """Marca escrita junto al codigo del modelo en los documentos del proveedor. El modelo a veces deja la marca
+    vacia aunque la linea dice "Impresora Epson EcoTank L4260". Solo se asigna si en todas las lineas donde
+    aparece el codigo hay una unica marca (y no es un requisito del tipo "similar a")."""
+    sin_marca = [p for p in productos if not p.get("marca")]
+    if not sin_marca or not bloques:
+        return productos
+    lineas_por_bloque = [(b.get("archivo"), b.get("pagina"), [l for l in str(b.get("texto") or "").splitlines() if l.strip()])
+                         for b in bloques]
+    for producto in sin_marca:
+        codigos = codigos_distintivos(producto)
+        if not codigos:
+            continue
+        marcas, fuente = set(), None
+        for archivo, pagina, lineas in lineas_por_bloque:
+            minusculas = [l.lower() for l in lineas]
+            for i, linea in enumerate(minusculas):
+                if not any(codigo in linea for codigo in codigos):
+                    continue
+                marca = marca_desde_descripcion(" ".join(lineas[max(0, i - 1):i + 2]))
+                if marca:
+                    marcas.add(marca)
+                    fuente = fuente or (archivo, pagina)
+        if len(marcas) == 1:
+            producto["marca"] = next(iter(marcas))
+            producto["metodo_marca"] = "linea_del_producto"
+            if fuente and fuente[0]:
+                producto["fuente_marca"], producto["pagina_marca"] = fuente
+    return productos
+
+
 def corregir_marca_por_familia(productos):
     """Una familia de producto pertenece a una sola marca (ThinkPad/LOQ=Lenovo, ProBook=HP...). Si el
     modelo declaro otra marca (p.ej. leyo el nombre del renglon vecino), manda la familia."""
@@ -2209,6 +2401,19 @@ def validar_productos(productos, parciales, total_oferta):
                     and any(abs(p["precio_total"] - objetivo) <= objetivo * 0.005
                             for objetivo in (total_referencia, total_referencia / TASA_IVA)))]
     totales = [producto.get("precio_total") for producto in productos]
+    if (total_referencia and totales and all(isinstance(total, (int, float)) and total > 0 for total in totales)
+            and all(linea_coherente(p) for p in productos)):
+        # El total del cuadro de ofertas es neto. Si la suma de las lineas es exactamente ese total x 1,19,
+        # las lineas se leyeron con IVA incluido (la oferta lo informo asi): se pasan a neto en vez de marcar
+        # todo el proveedor como inconsistente.
+        suma_lineas = sum(totales)
+        con_iva = float(total_referencia) * TASA_IVA
+        if abs(suma_lineas - con_iva) <= con_iva * 0.01:
+            for producto in productos:
+                producto["precio_total"] = round(producto["precio_total"] / TASA_IVA)
+                producto["precio_unitario"] = round(producto["precio_unitario"] / TASA_IVA)
+                producto["precios_convertidos_a_neto_por_total_oferta"] = True
+            totales = [producto.get("precio_total") for producto in productos]
     if total_referencia and totales and all(isinstance(total, (int, float)) for total in totales):
         suma = sum(totales)
         if suma > float(total_referencia) * 1.02:
@@ -3055,7 +3260,9 @@ def procesar_oferta_por_proveedor(carpeta, args, seven_zip):
     productos = completar_marcas_desde_parciales(productos, parciales)
     productos = reconciliar_precios_con_anexos(productos, bloques, total_oferta)
     productos = rescatar_filas_economicas(productos, relevantes, bloques, proveedor, rut)
+    productos = cruzar_filas_agregadas(productos, bloques)
     productos = completar_marcas_por_nombre_de_archivo(productos, [r["archivo"] for r in registros])
+    productos = completar_marcas_por_linea(productos, bloques)
 
     return {
         "proveedor": proveedor,
@@ -3244,8 +3451,10 @@ def procesar_oferta(carpeta, args, seven_zip, previo=None, archivos_reprocesar=N
         productos_finales = reconciliar_precios_con_anexos(productos_finales, bloques_completos, total_oferta, anular=False)
         productos_finales = rescatar_filas_economicas(
             productos_finales, filtrar_productos_relevantes(parciales), bloques_completos, proveedor, rut)
+        productos_finales = cruzar_filas_agregadas(productos_finales, bloques_completos)
         productos_finales = completar_marcas_por_nombre_de_archivo(
             productos_finales, [str(a.relative_to(carpeta)) for a in archivos])
+        productos_finales = completar_marcas_por_linea(productos_finales, bloques_completos)
         if not reutilizar:  # con checkpoints reutilizados faltan los textos de los archivos no releidos
             for bloque in bloques_completos:
                 numeros_documentos |= numeros_del_texto(bloque["texto"])
@@ -3590,6 +3799,8 @@ def main():
     parser.add_argument("--max-paginas", type=int, default=20)
     parser.add_argument("--max-filas-excel", type=int, default=500)
     parser.add_argument("--max-columnas-excel", type=int, default=40)
+    parser.add_argument("--espera-backend-min", type=int, default=30,
+                        help="minutos que se espera a que LM Studio vuelva si deja de responder (default: 30)")
     parser.add_argument("--permitir-sin-ocr", action="store_true",
                         help="continua aunque Tesseract no funcione (los PDF escaneados quedaran sin leer)")
     parser.add_argument("--ocr", action="store_true",
@@ -3655,6 +3866,8 @@ def main():
         args.prompt_compacto = True
         args.sin_consolidar = True
     DEBUG = args.debug
+    global ESPERA_BACKEND_MINUTOS
+    ESPERA_BACKEND_MINUTOS = max(0, args.espera_backend_min)
 
     if args.ocr and not args.solo_texto:
         ocr_ok, ocr_mensaje = verificar_ocr(args.tesseract_cmd, args.idioma_ocr)

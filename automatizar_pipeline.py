@@ -23,6 +23,8 @@ RAIZ_PROYECTO = Path(__file__).resolve().parent
 SCRIPT_FILTRAR = RAIZ_PROYECTO / "1_filtrar_licitaciones.py"
 SCRIPT_SCRAPER = RAIZ_PROYECTO / "2_scraper_ofertas.py"
 SCRIPT_IA = RAIZ_PROYECTO / "3_extraer_ia.py"
+SCRIPT_VERIFICAR = RAIZ_PROYECTO / "verificar_entorno.py"
+SCRIPT_CONTAR = RAIZ_PROYECTO / "contar_descargas.py"
 # Excel mensual del extractor local. Los lotes antiguos pueden tener el nombre
 # historico resultados_openai.xlsx; se leen como respaldo al consolidar.
 NOMBRE_EXCEL_MES = "resultados_ia_local.xlsx"
@@ -422,7 +424,22 @@ def main():
                         help="Omite la llamada de consolidacion por proveedor")
     parser.add_argument("--rehacer-ia", action="store_true",
                         help="Descarta resultados IA previos y rehace toda la inferencia local")
+    parser.add_argument("--recomendado", action="store_true",
+                        help="configuracion medida como la mejor: lmstudio, qwen/qwen3.6-35b-a3b, --por-proveedor "
+                             "--max-chars-proveedor 24000 --paralelo 4 --ocr")
+    parser.add_argument("--pasadas-scraping", type=int, default=2,
+                        help="pasadas de reparacion del scraping por mes (default: 2)")
+    parser.add_argument("--pasadas-ia", type=int, default=2,
+                        help="veces que se vuelve a correr la extraccion de un mes si quedaron errores (default: 2)")
+    parser.add_argument("--sin-verificar", action="store_true",
+                        help="no corre verificar_entorno.py al inicio")
     args = parser.parse_args()
+    if args.recomendado:
+        args.backend, args.por_proveedor, args.ocr = "lmstudio", True, True
+        if args.modelo == "llama3.2":
+            args.modelo = "qwen/qwen3.6-35b-a3b"
+        args.max_chars_proveedor = max(args.max_chars_proveedor, 24000)
+        args.paralelo = max(args.paralelo, 4)
 
     for valor, nombre in ((args.desde, "--desde"), (args.hasta, "--hasta")):
         if valor and not re.fullmatch(r"20\d{2}-(?:0[1-9]|1[0-2])", valor):
@@ -438,6 +455,16 @@ def main():
     fallos = []
 
     try:
+        if not args.sin_verificar and not args.solo_preparar:
+            verificacion = [sys.executable, str(SCRIPT_VERIFICAR), "--modelo", args.modelo,
+                            "--paralelo", str(args.paralelo), "--salida", str(salida)]
+            if args.omitir_ia or args.backend != "lmstudio":
+                verificacion.append("--sin-modelo")
+            if args.omitir_scraping:
+                verificacion.append("--sin-portal")
+            if ejecutar(verificacion, RAIZ_PROYECTO, log) != 0:
+                raise SystemExit("La verificacion del entorno encontro errores (ver arriba). Corrigelos o usa "
+                                 "--sin-verificar.")
         meses = preparar_lotes(entradas, salida, args.desde, args.hasta, log)
         print(f"\nLotes preparados: {', '.join(meses) if meses else 'ninguno'}")
         if args.solo_preparar:
@@ -468,15 +495,19 @@ def main():
                 codigo = ejecutar(comando, carpeta, log)
                 if codigo != 0:
                     fallos.append(f"{mes}: scraper termino con codigo {codigo}")
-                else:
-                    # Segunda pasada: completa lo que el portal entrego de forma intermitente (anexos que no
-                    # cargaron, grillas vacias, popups paginados). Solo baja lo que falta.
+            if not args.omitir_scraping:
+                # Pasadas de reparacion: completan lo que el portal entrego de forma intermitente (grillas
+                # vacias, anexos que no cargaron, descargas fallidas, popups paginados). Solo bajan lo que falta.
+                for pasada in range(1, max(0, args.pasadas_scraping) + 1):
+                    print(f"{mes}: reparacion del scraping, pasada {pasada}/{args.pasadas_scraping}")
                     reparar = [sys.executable, str(SCRIPT_SCRAPER), "--csv", "para_scrapear.csv", "--reparar"]
                     codigo = ejecutar(reparar, carpeta, log)
                     if codigo != 0:
                         fallos.append(f"{mes}: la reparacion del scraping termino con codigo {codigo}")
-            elif not args.omitir_scraping:
-                print(f"{mes}: scraping ya completo; no se abre Chromium")
+                        break
+                if (carpeta / "ofertas").is_dir():
+                    ejecutar([sys.executable, str(SCRIPT_CONTAR), "--dir", str(carpeta / "ofertas"),
+                              "--csv", str(carpeta / "descargas_faltantes.csv")], RAIZ_PROYECTO, log)
 
             carpeta_ofertas = carpeta / "ofertas"
             if args.omitir_ia or not carpeta_ofertas.is_dir():
@@ -527,10 +558,18 @@ def main():
                 comando.append("--sin-consolidar")
             if args.rehacer_ia:
                 comando.append("--rehacer")
-            codigo = ejecutar(comando, RAIZ_PROYECTO, log)
+            for pasada in range(1, max(1, args.pasadas_ia) + 1):
+                if pasada > 1:
+                    comando = [c for c in comando if c != "--rehacer"]  # las pasadas extra solo retoman
+                    print(f"{mes}: quedaron proveedores con error; extraccion, pasada {pasada}/{args.pasadas_ia}")
+                codigo = ejecutar(comando, RAIZ_PROYECTO, log)
+                actualizar_estado_ia(csv_mes, carpeta_ofertas)
+                filas_ia, _ = leer_csv(csv_mes)
+                con_error = [f for f in filas_ia if str(f.get("ia_estado") or "").startswith("error")]
+                if codigo == 0 and not con_error:
+                    break
             if codigo != 0:
                 fallos.append(f"{mes}: extractor IA local termino con codigo {codigo}")
-            actualizar_estado_ia(csv_mes, carpeta_ofertas)
 
         meses_con_reporte = sorted(
             path.name for path in salida.iterdir()
