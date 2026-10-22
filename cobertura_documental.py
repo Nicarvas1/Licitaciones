@@ -187,6 +187,10 @@ def resumir_proveedor(documentos, necesita_ocr=(), no_soportados=()):
     sin_texto += [a for a in necesita_ocr if a not in sin_texto]
     sin_texto += [a for a in no_soportados
                   if a not in sin_texto and Path(a).suffix.lower() not in EXTENSIONES_COMPRIMIDAS]
+    # Carnets, RUT, certificados y declaraciones escaneados del anexo administrativo no son la oferta: que no se
+    # puedan leer no deja ningun dato del producto "pendiente de OCR".
+    es_ruido = cargar_extractor().es_ruido_administrativo
+    sin_texto = [a for a in sin_texto if not es_ruido(a)]
     roles = sorted({d["rol"] for d in legibles})
     if not documentos:
         clase = "sin_documentos"

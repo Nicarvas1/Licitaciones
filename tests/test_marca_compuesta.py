@@ -41,5 +41,23 @@ class LecturaDocAntiguoTest(unittest.TestCase):
             self.assertEqual(E.extraer_doc(Path("oferta.doc")), ("", "no_soportado"))
 
 
+
+class OcrYRuidoAdministrativoTest(unittest.TestCase):
+    def test_carnet_y_certificados_del_anexo_administrativo_son_ruido(self):
+        for nombre in ("administrativo__20__2-carnetPamelaLegalizado.pdf", "administrativo__02__Certificado_de_habilidad.pdf",
+                       "administrativo__05__Programa_Integridad_ACT.pdf"):
+            self.assertTrue(E.es_ruido_administrativo(nombre), nombre)
+
+    def test_cotizacion_dentro_del_anexo_administrativo_no_es_ruido(self):
+        for nombre in ("administrativo__03__COTIZACION_ID_564162-16.pdf", "administrativo__01__ECONOMICO4291-4-LE26.pdf",
+                       "administrativo__03__FT-HP_ProOne_240.pdf", "tecnico__01__certificado.pdf"):
+            self.assertFalse(E.es_ruido_administrativo(nombre), nombre)
+
+    def test_sin_tesseract_la_comprobacion_falla_con_mensaje(self):
+        ok, mensaje = E.verificar_ocr(r"C:\no\existe\tesseract.exe")
+        self.assertFalse(ok)
+        self.assertIn("Tesseract", mensaje)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -66,5 +66,17 @@ class PaginacionDelPopupTest(unittest.TestCase):
             self.assertFalse(scraper.archivo_ya_bajado(carpeta, "economico", 3))
 
 
+
+class HuecosEnLaNumeracionTest(unittest.TestCase):
+    def test_un_hueco_en_los_indices_marca_al_proveedor_como_incompleto(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lic = Path(tmp) / "100-1-LE26"
+            proveedor(lic / "1-1__con_hueco", "1-1", {"tecnico": "u"},
+                      ["tecnico__01__a.pdf", "tecnico__02__b.pdf", "tecnico__04__d.pdf"])
+            proveedor(lic / "2-2__sin_hueco", "2-2", {"tecnico": "u"},
+                      ["tecnico__01__a.pdf", "tecnico__02__b.pdf", "tecnico__03__c.pdf"])
+            self.assertEqual(scraper.faltantes_en_disco(lic), {"1-1"})
+
+
 if __name__ == "__main__":
     unittest.main()

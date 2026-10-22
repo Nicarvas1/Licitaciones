@@ -185,9 +185,26 @@ def archivo_ya_bajado(carpeta, prefijo, indice):
     return any(Path(carpeta).glob(f"{prefijo}__{indice:02d}__*"))
 
 
+def ir_a_pagina_popup(popup, pagina):
+    """Navega el popup a la pagina N de su grilla (postback de ASP.NET). La 1 es la que carga por defecto."""
+    if pagina <= 1:
+        return True
+    try:
+        with popup.expect_navigation(wait_until="networkidle", timeout=45000):
+            popup.evaluate(f"__doPostBack('DWNL$grdId','Page${pagina}')")
+        return True
+    except Exception as e:
+        print(f"        ⚠️ pagina {pagina} del popup: {str(e)[:40]}")
+        return False
+
+
 def descargar_popup(context, url_popup, carpeta, prefijo, max_paginas=40):
-    """Descarga TODOS los archivos de un anexo recorriendo las paginas del popup. Los archivos que ya
-    existen (mismo prefijo e indice) no se vuelven a bajar. Devuelve cuantos archivos nuevos bajo."""
+    """Descarga TODOS los archivos de un anexo recorriendo las paginas del popup.
+
+    El portal vuelve a dibujar el popup despues de cada descarga, asi que los botones se piden de nuevo
+    antes de cada clic (si no, quedan "desprendidos del DOM" y la descarga falla). Si un archivo falla se
+    reabre el popup en la misma pagina y se reintenta. Los archivos que ya existen (mismo prefijo e indice)
+    no se vuelven a bajar. Devuelve cuantos archivos nuevos bajo."""
     bajados = 0
     popup = abrir_popup(context, url_popup)
     if popup is None:
@@ -195,37 +212,47 @@ def descargar_popup(context, url_popup, carpeta, prefijo, max_paginas=40):
     indice, pagina, visitadas = 0, 1, set()
     while pagina not in visitadas and len(visitadas) < max_paginas:
         visitadas.add(pagina)
-        for boton in botones_de_descarga(popup):
+        for posicion in range(len(botones_de_descarga(popup))):
             indice += 1
             if archivo_ya_bajado(carpeta, prefijo, indice):
                 continue
-            for intento in (1, 2):
+            ultimo_error = ""
+            for intento in (1, 2, 3):
                 try:
+                    botones = botones_de_descarga(popup)
+                    if posicion >= len(botones):
+                        raise RuntimeError("el boton de descarga ya no esta en la pagina")
                     with popup.expect_download(timeout=45000) as dl:
-                        boton.click()
+                        botones[posicion].click()
                     d = dl.value
                     nom = re.sub(r"[^\w\s.\-()]", "_", d.suggested_filename or f"{prefijo}_{indice}")[:150]
                     dest = carpeta / f"{prefijo}__{indice:02d}__{nom}"
                     d.save_as(str(dest))
                     bajados += 1
                     print(f"        ✅ {dest.name[:58]}")
+                    ultimo_error = ""
                     break
                 except Exception as e:
-                    if intento == 2:
-                        print(f"        ⚠️ archivo {indice}: {str(e)[:40]}")
-                    else:
-                        time.sleep(1.5)
+                    ultimo_error = str(e)[:40]
+                    time.sleep(1.5 * intento)
+                    if intento >= 2:  # el popup quedo en mal estado: se reabre en la misma pagina
+                        nuevo_popup = abrir_popup(context, url_popup)
+                        if nuevo_popup is not None:
+                            try:
+                                popup.close()
+                            except Exception:
+                                pass
+                            popup = nuevo_popup
+                            ir_a_pagina_popup(popup, pagina)
+            if ultimo_error:
+                print(f"        ⚠️ archivo {indice}: {ultimo_error}")
             time.sleep(0.4)
         siguientes = sorted(int(n) for n in PATRON_PAGINA_POPUP.findall(popup.content()) if int(n) > pagina)
         if not siguientes:
             break
-        pagina = siguientes[0]
-        try:
-            with popup.expect_navigation(wait_until="networkidle", timeout=45000):
-                popup.evaluate(f"__doPostBack('DWNL$grdId','Page${pagina}')")
-        except Exception as e:
-            print(f"        ⚠️ pagina {pagina} del popup: {str(e)[:40]}")
+        if not ir_a_pagina_popup(popup, siguientes[0]):
             break
+        pagina = siguientes[0]
     popup.close()
     return bajados
 
@@ -307,11 +334,23 @@ def procesar_licitacion(context, identificador, es_qs=False,
         ofertas = parsear_ofertas(html_pag)
         # La grilla a veces llega vacia (carga lenta del iframe): se vuelve a leer antes de darla por vacia.
         intentos_grilla = 0
-        while not ofertas and pag == 1 and intentos_grilla < 3:
+        while not ofertas and intentos_grilla < 3:
             intentos_grilla += 1
             print(f"   ↻ grilla sin ofertas; releyendo ({intentos_grilla}/3)...")
             time.sleep(4.0 * intentos_grilla)
-            frame, html_pag = localizar_frame(page)
+            try:
+                if intentos_grilla >= 2:
+                    # Releer no basta: se vuelve a abrir el cuadro de ofertas (y la pagina de la grilla).
+                    page.goto(links["cuadro_ofertas"], wait_until="networkidle", timeout=60000)
+                    time.sleep(3.0)
+                    frame, _ = localizar_frame(page)
+                    if pag > 1:
+                        frame.evaluate(f'fnMovePage({pag}, "WucPagerGrid");')
+                        time.sleep(3.0)
+                frame, html_pag = localizar_frame(page)
+            except Exception as e:
+                print(f"   ⚠️ no se pudo releer la grilla: {str(e)[:50]}")
+                continue
             ofertas = parsear_ofertas(html_pag)
         print(f"   Página {pag}/{n_pag}: {len(ofertas)} ofertas")
         for of in ofertas:
@@ -351,10 +390,12 @@ def procesar_licitacion(context, identificador, es_qs=False,
                 print("       - administrativo (el proveedor no tiene economico ni tecnico descargable)")
                 total_arch += descargar_popup(context, of["anexos"]["administrativo"], carpeta_of, "administrativo")
 
-    if total_of == 0 and (carpeta_lic / "metadata.json").is_file():
-        # Respuesta vacia sobre una licitacion que ya tenia datos: se conserva lo descargado.
+    if total_of == 0:
+        # Una grilla vacia casi siempre es una respuesta incompleta del portal (en una corrida de 600 licitaciones
+        # le paso al 9 %), no una licitacion sin ofertas. Se informa como error reintentable y no se escribe
+        # metadata, para que otra pasada (--reparar) la vuelva a intentar en vez de darla por buena.
         page.close()
-        print("   ⚠️ la grilla siguio vacia; se conserva la metadata anterior")
+        print("   ⚠️ la grilla siguio vacia tras reintentos; se marca para reintentar")
         return {"codigo": codigo, "ofertas": 0, "archivos": 0, "estado": "sin_ofertas_leidas"}
     (carpeta_lic / "metadata.json").write_text(
         json.dumps({"codigo": codigo, "ofertas": total_of, "archivos": total_arch,
@@ -502,8 +543,15 @@ def faltantes_en_disco(carpeta_licitacion, tipos=("economico", "tecnico")):
         bajados = set(prefijos)
         enlaces = datos.get("enlaces_anexos") or {}
         sin_nada = not carpeta_tiene_archivos(carpeta)
+        # Huecos en la numeracion (01, 02, 04...): una descarga fallo y no se reintento.
+        con_huecos = False
+        for t in ("economico", "tecnico", "administrativo"):
+            indices = sorted(int(m.group(1)) for f in carpeta.iterdir() if f.is_file()
+                             for m in [re.match(rf"{t}__(\d+)__", f.name)] if m)
+            if indices and indices != list(range(1, indices[-1] + 1)):
+                con_huecos = True
         # Un anexo con exactamente 6 archivos (o multiplo) puede estar truncado: el popup pagina de a 6.
-        posible_truncado = any(
+        posible_truncado = con_huecos or any(
             t in enlaces and prefijos.count(t) and prefijos.count(t) % ARCHIVOS_POR_PAGINA_POPUP == 0
             for t in (*tipos, "administrativo"))
         if (any(t in enlaces and t not in bajados for t in tipos) or posible_truncado

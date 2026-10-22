@@ -203,6 +203,42 @@ def cargar_metadata_para_corrida(licitaciones, ruta_explicitada=None):
     return metadata
 
 
+def verificar_ocr(tesseract_cmd=None, idioma="spa+eng"):
+    """(ok, mensaje). Con --ocr, un Tesseract ausente no da error: los PDF escaneados quedan "sin leer" y se
+    pierden productos sin aviso. Esta comprobacion se hace al arrancar para que falle de forma visible."""
+    if pytesseract is None or Image is None:
+        return False, "falta la libreria pytesseract o Pillow (pip install -r requirements.txt)"
+    if tesseract_cmd:
+        pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    try:
+        version = str(pytesseract.get_tesseract_version())
+        idiomas = set(pytesseract.get_languages(config=""))
+    except Exception as exc:
+        return False, (f"no se pudo ejecutar Tesseract ({str(exc)[:80]}). Instalalo (con el idioma espanol) o "
+                       f"indica su ruta con --tesseract-cmd")
+    faltan = [i for i in idioma.split("+") if i and i not in idiomas]
+    if faltan:
+        # Sin el paquete de idioma espanol el OCR sigue sirviendo (cifras y marcas), pero lee peor los acentos.
+        return True, (f"Tesseract {version}; AVISO: falta el idioma {', '.join(faltan)} y se usara "
+                      f"{idioma_ocr_efectivo(idioma)} (disponibles: {', '.join(sorted(idiomas))})")
+    return True, f"Tesseract {version} ({', '.join(sorted(idiomas))})"
+
+
+_IDIOMAS_OCR = {}
+
+
+def idioma_ocr_efectivo(idioma):
+    """Idioma pedido, reducido a los paquetes que Tesseract realmente tiene (se consulta una sola vez)."""
+    if idioma not in _IDIOMAS_OCR:
+        try:
+            disponibles = set(pytesseract.get_languages(config=""))
+            validos = [i for i in idioma.split("+") if i in disponibles]
+            _IDIOMAS_OCR[idioma] = "+".join(validos) if validos else idioma
+        except Exception:
+            _IDIOMAS_OCR[idioma] = idioma
+    return _IDIOMAS_OCR[idioma]
+
+
 def extraer_pdf_ocr(
     path,
     max_paginas,
@@ -216,6 +252,7 @@ def extraer_pdf_ocr(
         return "", "ocr_dependencia_no_disponible"
     if tesseract_cmd:
         pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+    idioma = idioma_ocr_efectivo(idioma)
     try:
         # Renderizar bajo lock (PyMuPDF no es thread-safe); el OCR corre fuera del lock.
         renders = []
@@ -2244,6 +2281,23 @@ def documento_de_historial(relativo, texto):
     return bool(PATRON_NOMBRE_HISTORIAL.search(str(relativo)) or PATRON_CONTENIDO_OC.search(texto[:4000]))
 
 
+PATRON_ADMIN_RUIDO = re.compile(
+    r"carnet|c[eé]dula|(?<![a-z])rut(?![a-z])|poder|escritura|patente|tributari|certificad|declaraci|"
+    r"integridad|pacto|constituci[oó]n|f[-_ ]?30|antecedentes|inhabilidad|boleta|seriedad|firma|sello|"
+    r"vigencia|anotaciones|domicilio|resoluci[oó]n", re.I)
+PATRON_ADMIN_POSITIVO = re.compile(
+    r"cotiz|econ[oó]m|oferta|precio|ficha|t[eé]cnic|especific|(?<![a-z])ft(?![a-z])|catalogo", re.I)
+
+
+def es_ruido_administrativo(relativo):
+    """Documento del anexo administrativo que claramente no es la oferta (carnet, RUT, certificados,
+    declaraciones, programas de integridad...). No vale la pena hacerle OCR ni quedara "pendiente"."""
+    nombre = str(relativo).replace("\\", "/").split("/")[-1]
+    if "administrativo__" not in str(relativo).replace("\\", "/"):
+        return False
+    return bool(PATRON_ADMIN_RUIDO.search(nombre)) and not PATRON_ADMIN_POSITIVO.search(nombre)
+
+
 PATRON_NOMBRE_RUIDO = re.compile(
     r"iso[_ .-]?\d|certificad|pacto|integridad|reciclaj|etiqueta|p[oó]liza|garant[ií]a|declaraci[oó]n|"
     r"experiencia|orden[_ .-]?de[_ .-]?compra|energy[_ .-]?star|epeat|blue[_ .-]?angel|gu[ií]a[_ .-]?de[_ .-]?compra|foro",
@@ -2818,7 +2872,8 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
                 imagenes = renderizar_paginas_pdf(path, sorted(paginas_vision), args.dpi_vision)
             else:
                 sin_leer = list(escaneadas)
-                if escaneadas and args.ocr:
+                ruido_admin = es_ruido_administrativo(relativo)
+                if escaneadas and args.ocr and not ruido_admin:
                     paginas_ocr = {}
                     _, estado_ocr = extraer_pdf_ocr(path, args.max_paginas, args.tesseract_cmd, args.idioma_ocr,
                                                     args.dpi_ocr, paginas=set(escaneadas), texto_paginas=paginas_ocr)
@@ -2830,7 +2885,7 @@ def preparar_bloques_proveedor(carpeta, archivos, args):
                 if sin_leer and args.vision:
                     imagenes = renderizar_paginas_pdf(path, sin_leer, args.dpi_vision)
                     registro["paginas_vision"] = {str(i + 1): "sin_texto" for i in sin_leer}
-                elif sin_leer and relativo not in necesita_ocr:
+                elif sin_leer and not ruido_admin and relativo not in necesita_ocr:
                     necesita_ocr.append(relativo)
             for indice in sorted(set(texto_paginas) | set(imagenes)):
                 texto_pagina = texto_paginas.get(indice, "")
@@ -3535,6 +3590,8 @@ def main():
     parser.add_argument("--max-paginas", type=int, default=20)
     parser.add_argument("--max-filas-excel", type=int, default=500)
     parser.add_argument("--max-columnas-excel", type=int, default=40)
+    parser.add_argument("--permitir-sin-ocr", action="store_true",
+                        help="continua aunque Tesseract no funcione (los PDF escaneados quedaran sin leer)")
     parser.add_argument("--ocr", action="store_true",
                         help="Aplica Tesseract solo a PDF sin texto extraible")
     parser.add_argument("--tesseract-cmd",
@@ -3598,6 +3655,17 @@ def main():
         args.prompt_compacto = True
         args.sin_consolidar = True
     DEBUG = args.debug
+
+    if args.ocr and not args.solo_texto:
+        ocr_ok, ocr_mensaje = verificar_ocr(args.tesseract_cmd, args.idioma_ocr)
+        if ocr_ok:
+            print(f"OCR disponible: {ocr_mensaje}")
+        elif args.permitir_sin_ocr:
+            print(f"AVISO: el OCR no funciona y se continua sin el: {ocr_mensaje}")
+        else:
+            sys.exit(f"ERROR: se pidio --ocr pero {ocr_mensaje}." + chr(10) +
+                     "Sin OCR los PDF escaneados no se leen y se pierden productos. Corrige la instalacion "
+                     "o usa --permitir-sin-ocr para continuar de todos modos.")
 
     raiz = Path(args.dir)
     if not os.path.isdir(ruta_sistema(raiz)):
