@@ -91,5 +91,26 @@ class LicitacionSinDatosTest(unittest.TestCase):
             self.assertFalse(scraper.licitacion_sin_datos(lic))
 
 
+
+class FiltroAdministrativosTest(unittest.TestCase):
+    OMITIR = ["8-ANEXO_N_1_IDENTIFICACIN_DEL_OFERENTE.pdf", "04.-_Ministerio_de_Hacienda_1618-257-SE25.pdf",
+              "44.-_Servicio_Local_de_Educacion_Publica_Licancabur_1233623-66-SE.pdf",
+              "Anexo_N__7_DECLARACION_JURADA_NO_PRESENTACION.pdf", "CERTIFICADO_DE_VIGENCIA_DE_LA_SOCIEDAD.pdf",
+              "CARPETA_TRIBUTARIA_ALCA.pdf", "10-PROGRAMA_DE_INTEGRIDAD_Todotablet.pdf", "2022_Cedula_CM.pdf",
+              "Anexo_05__Experiencia_del_oferente.pdf", "factura_electronica_5810.pdf", "OC.zip", "10.-_C.I_ALEJANDRA.pdf"]
+    CONSERVAR = ["Anexo_03__Oferta_Economica_y_plazos.pdf", "Resumen_propuesta_SYNERGY.pdf", "COTIZACION_ID_564162-16-L126.pdf",
+                 "FT-Impresora_EPSON_Multifuncional_EcoTank_L5590.pdf", "ANEXO_N_4_OFERTA_ECONOMICA.pdf", "PPTO.pdf",
+                 "Ficha_tecnica_Brother_MFC-L6915DW.pdf", "anexo_4_(44).pdf", "Documentos_Empresa.zip",
+                 "2-ANEXO_N__4_ESPECIFICACIONES_TECNICAS_-_OFERTA_ECONOMICA.docx"]
+
+    def test_omite_declaraciones_certificados_y_ordenes_de_compra_pasadas(self):
+        for nombre in self.OMITIR:
+            self.assertTrue(scraper.es_administrativo_sin_oferta(nombre), nombre)
+
+    def test_conserva_ofertas_fichas_y_nombres_dudosos(self):
+        for nombre in self.CONSERVAR:
+            self.assertFalse(scraper.es_administrativo_sin_oferta(nombre), nombre)
+
+
 if __name__ == "__main__":
     unittest.main()

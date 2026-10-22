@@ -198,7 +198,38 @@ def ir_a_pagina_popup(popup, pagina):
         return False
 
 
-def descargar_popup(context, url_popup, carpeta, prefijo, max_paginas=40):
+PATRON_ADMIN_UTIL = re.compile(
+    r"cotiz|ofert(?!ente)|econ[oó]m|precio|valor|ficha|t[eé]cnic|especific|propuesta|cat[aá]logo|"
+    r"resumen|equipo|notebook|computador|monitor|impresora|producto|(?<![a-z])item|(?<![a-z])lote", re.I)
+PATRON_ADMIN_SIN_OFERTA = re.compile(
+    r"declara|certific|(?<![a-z])rut(?![a-z])|carnet|c[eé]dula|poder|escritura|integridad|pacto|boleta|"
+    r"patente|tribut|f[-_ ]?30(?!\d)|antecedente|identificaci|seriedad|constituci|vigencia|experiencia|"
+    r"orden(?:es)?[ _-]*de[ _-]*compra|(?<!\d)\d{3,7}-\d{1,4}-(?:se|ag|cm|co|ac|sb)\d{0,2}(?![a-z])|curr[ií]cul|"
+    r"inhabilidad|sello|pol[ií]tica|balance|financier|compromiso|post[ _-]*venta|simult|conflicto|reciclaj|"
+    r"iso[ _-]?\d|bancari|cuenta[ _-]corriente|mujer|pyme|chileproveedores|garant[ií]a|prevenci|delito|factura|"
+    r"interactivo|sociedad|(?<![a-z])c\.?i\.?(?![a-z])|(?<![a-z])oc(?![a-z])", re.I)
+
+
+def es_administrativo_sin_oferta(nombre):
+    """Archivo del anexo administrativo que por su nombre claramente no es la oferta: declaraciones juradas,
+    certificados, RUT, escrituras, programas de integridad u ordenes de compra de ventas pasadas (experiencia).
+    Lo que nombre una cotizacion, oferta, ficha o equipo siempre se conserva."""
+    nombre = str(nombre or "")
+    return bool(PATRON_ADMIN_SIN_OFERTA.search(nombre)) and not PATRON_ADMIN_UTIL.search(nombre)
+
+
+def nombre_en_popup(popup, posicion):
+    """Texto de la fila del popup (incluye el nombre del archivo) para el boton de descarga en `posicion`."""
+    try:
+        botones = botones_de_descarga(popup)
+        if posicion < len(botones):
+            return botones[posicion].evaluate("b => { const f = b.closest('tr'); return f ? f.innerText : ''; }")
+    except Exception:
+        pass
+    return ""
+
+
+def descargar_popup(context, url_popup, carpeta, prefijo, max_paginas=40, omitir=None, omitidos=None):
     """Descarga TODOS los archivos de un anexo recorriendo las paginas del popup.
 
     El portal vuelve a dibujar el popup despues de cada descarga, asi que los botones se piden de nuevo
@@ -213,6 +244,13 @@ def descargar_popup(context, url_popup, carpeta, prefijo, max_paginas=40):
     while pagina not in visitadas and len(visitadas) < max_paginas:
         visitadas.add(pagina)
         for posicion in range(len(botones_de_descarga(popup))):
+            if omitir is not None:
+                fila = nombre_en_popup(popup, posicion)
+                if fila and omitir(fila):
+                    # Los omitidos no consumen numero: la numeracion queda continua y estable entre corridas.
+                    if omitidos is not None:
+                        omitidos.append(" ".join(fila.split())[:160])
+                    continue
             indice += 1
             if archivo_ya_bajado(carpeta, prefijo, indice):
                 continue
@@ -377,18 +415,30 @@ def procesar_licitacion(context, identificador, es_qs=False,
                 continue
             if rut in ruts_excluir:
                 continue
+            omitidos_admin = []
             for tipo, url_popup in of["anexos"].items():
                 ya_tiene_admin = tipo == "administrativo" and any(carpeta_of.glob("administrativo__*"))
                 if tipo not in tipos_anexos and not ya_tiene_admin:
                     continue
                 print(f"       - {tipo}")
-                total_arch += descargar_popup(context, url_popup, carpeta_of, tipo)
+                filtrar = tipo == "administrativo" and tipo not in tipos_anexos
+                total_arch += descargar_popup(context, url_popup, carpeta_of, tipo,
+                                              omitir=es_administrativo_sin_oferta if filtrar else None,
+                                              omitidos=omitidos_admin if filtrar else None)
             # Hay proveedores que suben su cotizacion dentro del anexo "administrativo": si no quedo ningun
             # archivo del proveedor, se baja tambien ese anexo.
             if (admin_si_vacio and "administrativo" not in tipos_anexos and "administrativo" in of["anexos"]
                     and not carpeta_tiene_archivos(carpeta_of)):
                 print("       - administrativo (el proveedor no tiene economico ni tecnico descargable)")
-                total_arch += descargar_popup(context, of["anexos"]["administrativo"], carpeta_of, "administrativo")
+                total_arch += descargar_popup(context, of["anexos"]["administrativo"], carpeta_of, "administrativo",
+                                              omitir=es_administrativo_sin_oferta, omitidos=omitidos_admin)
+            if omitidos_admin:
+                # Se deja constancia de lo que no se bajo (declaraciones, certificados, OC pasadas...).
+                datos_oferta = json.loads((carpeta_of / "oferta.json").read_text(encoding="utf-8"))
+                datos_oferta["administrativos_omitidos"] = sorted(set(omitidos_admin))
+                (carpeta_of / "oferta.json").write_text(json.dumps(datos_oferta, ensure_ascii=False, indent=2),
+                                                        encoding="utf-8")
+                print(f"         ({len(set(omitidos_admin))} administrativos omitidos por nombre: no son la oferta)")
 
     if total_of == 0:
         # Una grilla vacia casi siempre es una respuesta incompleta del portal (en una corrida de 600 licitaciones
