@@ -219,11 +219,19 @@ def es_administrativo_sin_oferta(nombre):
 
 
 def nombre_en_popup(popup, posicion):
-    """Texto de la fila del popup (incluye el nombre del archivo) para el boton de descarga en `posicion`."""
+    """Nombre del archivo en la fila del popup para el boton de descarga en `posicion`.
+
+    La fila trae: nombre, tipo de anexo ("Anexos Administrativos de Oferta"), nombre otra vez y tamano. Solo se
+    devuelve el nombre: la columna de tipo dice "Oferta" y haria parecer util a cualquier archivo."""
     try:
         botones = botones_de_descarga(popup)
         if posicion < len(botones):
-            return botones[posicion].evaluate("b => { const f = b.closest('tr'); return f ? f.innerText : ''; }")
+            texto = botones[posicion].evaluate("b => { const f = b.closest('tr'); return f ? f.innerText : ''; }")
+            celdas = [c.strip() for c in str(texto or "").split("\t") if c.strip()]
+            for celda in celdas:
+                if re.search(r"\.[A-Za-z0-9]{2,5}$", celda) and not re.match(r"anexos?\s+\w+\s+de\s+oferta", celda, re.I):
+                    return celda
+            return next((c for c in celdas if not re.match(r"anexos?\s+\w+\s+de\s+oferta", c, re.I)), "")
     except Exception:
         pass
     return ""
