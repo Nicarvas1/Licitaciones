@@ -54,7 +54,11 @@ class OcrYRuidoAdministrativoTest(unittest.TestCase):
             self.assertFalse(E.es_ruido_administrativo(nombre), nombre)
 
     def test_sin_tesseract_la_comprobacion_falla_con_mensaje(self):
-        ok, mensaje = E.verificar_ocr(r"C:\no\existe\tesseract.exe")
+        anterior = E.pytesseract.pytesseract.tesseract_cmd
+        try:
+            ok, mensaje = E.verificar_ocr(r"C:\no\existe\tesseract.exe")
+        finally:
+            E.pytesseract.pytesseract.tesseract_cmd = anterior
         self.assertFalse(ok)
         self.assertIn("Tesseract", mensaje)
 
